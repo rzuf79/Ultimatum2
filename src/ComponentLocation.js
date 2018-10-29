@@ -2,13 +2,13 @@ function ComponentLocation(game){
 	this.name 				= "Location";
 	this.entity 			= null;
 
-	this.imageLocation 		= null;
-
 	this.tiles 				= [];
-	this.currentLocation	= null;
-
 	this.tileNames			= [];
 	this.tileSymbols		= [];
+
+	this.imageLocation 		= null;
+	this.currentLocation	= null;
+	this.specialTiles		= [];
 
 	this.create = function(){
 		this.imageLocation = this.entity.addComponent(new ComponentImage());
@@ -20,6 +20,8 @@ function ComponentLocation(game){
 
 		for(var i = 0; i < this.tileNames.length; ++i){
 			var newTile 	= chao.createImage(this.tileNames[i], Reg.TILE_W, Reg.TILE_H);
+			var tileSprite	= chao.createImage(undefined, Reg.TILE_W, Reg.TILE_H);
+
 			var tileRect	= {
 				x: Tiles[this.tileNames[i]].x * Reg.TILE_W,
 				y: Tiles[this.tileNames[i]].y * Reg.TILE_H,
@@ -27,8 +29,11 @@ function ComponentLocation(game){
 				height: Reg.TILE_H
 			}
 
-			chao.drawImagePart(newTile, tilesAtlas, 0, 0, tileRect);
-			chao.tintImage(newTile, Tiles[this.tileNames[i]].color);
+			chao.drawImagePart(tileSprite, tilesAtlas, 0, 0, tileRect);
+			chao.tintImage(tileSprite, Tiles[this.tileNames[i]].color);
+
+			chao.clearToColor(newTile, chao.makeColor(0, 0, 0));
+			chao.drawImage(newTile, tileSprite, 0, 0);
 
 			this.tiles.push(newTile);
 		}
@@ -48,6 +53,12 @@ function ComponentLocation(game){
 	}
 
 	this.loadLocation = function(locationName){
+
+		for(var i = 0; i < this.specialTiles.length; ++i){
+			this.entity.remove(this.specialTiles[i]);
+		}
+		this.specialTiles = [];
+
 		var newLocation 	= Maps[locationName];
 		var width 			= newLocation.map[0].length;
 		var height 			= newLocation.map.length;
@@ -65,14 +76,23 @@ function ComponentLocation(game){
 				}
 
 				var image = this.tiles[symbolIdx];
-
 				chao.drawImage(locationCanvas, image, i*Reg.TILE_W, j*Reg.TILE_H);
+				
+				if(symbol === "~" || symbol === "="){
+					this.addWater(i, j, image);
+				}
 			}
 		}
 
 		this.imageLocation.setImage(locationCanvas);
 
 		this.currentLocation = newLocation;
+	}
+
+	this.addWater = function(x, y, image){
+		var waterTile = (new Entity("Water", x*Reg.TILE_W, y*Reg.TILE_H).addComponent(new ComponentWater(image)));
+		this.entity.add(waterTile.entity);
+		this.specialTiles.push(waterTile.entity);
 	}
 
 	this.getTileSymbol = function(x, y){

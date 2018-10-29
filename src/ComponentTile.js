@@ -1,4 +1,4 @@
-function ComponentTile(game){
+function ComponentTile(game, tileName){
 	this.name 				= "Tile";
 	this.entity 			= null;
 
@@ -20,6 +20,5 @@ function ComponentTile(game){
 	this.update = function(){
 		//
 	}
-
 
 }

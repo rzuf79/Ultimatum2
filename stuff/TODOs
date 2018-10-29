@@ -1,0 +1,10 @@
+Piotr's TODOs
+
+- animated tiles (for water and force fields)
+- convert all the locations to ascii
+- traveling between locations
+- in-game messages (we have to display the magnificent "HEX-E-POO" line somewhere, right?)
+- inventory
+- character stats
+- figure out the most convenient way of putting stuff on maps, like npcs, monsters, doors, planes etc
+- some npcs

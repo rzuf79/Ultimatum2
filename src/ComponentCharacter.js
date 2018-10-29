@@ -1,5 +1,5 @@
 function ComponentCharacter(game, tileName){
-	this.name 				= "Player";
+	this.name 				= "Character";
 	this.entity 			= null;
 
 	this.game				= game;
