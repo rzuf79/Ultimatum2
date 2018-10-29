@@ -56,8 +56,14 @@ function ComponentLocation(game){
 
 		for(var i = 0; i < width; ++i){
 			for(var j = 0; j < height; ++j){
-				var symbol  = newLocation.map[j][i];
-				var image 	= this.tiles[this.tileSymbols.indexOf(symbol)];
+				var symbol  	= newLocation.map[j][i];
+				var symbolIdx 	= this.tileSymbols.indexOf(symbol);
+
+				if(symbolIdx == -1){
+					chao.log("Unrecognized map symbol: \"" + symbol + "\"");
+				}
+
+				var image 		= this.tiles[symbolIdx];
 
 				chao.drawImage(locationCanvas, image, i*Reg.TILE_W, j*Reg.TILE_H);
 			}

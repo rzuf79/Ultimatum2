@@ -23,7 +23,7 @@ function StateGame(){
 		this.location = (new Entity("Location")).addComponent(new ComponentLocation(this));
 		this.camera.entity.add(this.location.entity);
 
-		this.location.loadLocation("bc1423");
+		this.location.loadLocation("newSanAntonio");
 
 	}
 
