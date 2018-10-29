@@ -10,6 +10,9 @@ function ComponentLocation(game){
 	this.currentLocation	= null;
 	this.specialTiles		= [];
 
+	this.waterTileY			= 0;
+	this.imageWater			= null;
+
 	this.create = function(){
 		this.imageLocation = this.entity.addComponent(new ComponentImage());
 
@@ -38,6 +41,7 @@ function ComponentLocation(game){
 			this.tiles.push(newTile);
 		}
 
+		this.imageWater = chao.createImage("water_tile", Reg.TILE_W, Reg.TILE_H);
 	}
 
 	this.destroy = function(){
@@ -49,7 +53,16 @@ function ComponentLocation(game){
 	}
 
 	this.update = function(){
-		//
+		// update animated tiles
+		this.waterTileY += chao.getTimeDelta()*2;
+		if(this.waterTileY >= Reg.TILE_H){
+			this.waterTileY -= Reg.TILE_H;
+		}
+
+		var waterImage = chao.getImage("water");
+		chao.drawImage(this.imageWater, waterImage, 0, this.waterTileY);
+		chao.drawImage(this.imageWater, waterImage, 0, this.waterTileY-Reg.TILE_H);
+
 	}
 
 	this.loadLocation = function(locationName){
@@ -78,8 +91,8 @@ function ComponentLocation(game){
 				var image = this.tiles[symbolIdx];
 				chao.drawImage(locationCanvas, image, i*Reg.TILE_W, j*Reg.TILE_H);
 				
-				if(symbol === "~" || symbol === "="){
-					this.addWater(i, j, image);
+				if(symbol === "~"){
+					this.addWater(i, j, this.imageWater);
 				}
 			}
 		}
@@ -90,7 +103,7 @@ function ComponentLocation(game){
 	}
 
 	this.addWater = function(x, y, image){
-		var waterTile = (new Entity("Water", x*Reg.TILE_W, y*Reg.TILE_H).addComponent(new ComponentWater(image)));
+		var waterTile = chao.helpers.createImage("Water", image, x*Reg.TILE_W, y*Reg.TILE_H);
 		this.entity.add(waterTile.entity);
 		this.specialTiles.push(waterTile.entity);
 	}
