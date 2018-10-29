@@ -260,19 +260,31 @@ const Tiles = {
 	},
 
 	X: {
-		x: 3,
-		y: 2,
-		color: Reg.colorGray
-	},
-
-	Y: {
 		x: 10,
 		y: 2,
 		color: Reg.colorGray
 	},
 
-	Z: {
+	Y: {
 		x: 11,
+		y: 2,
+		color: Reg.colorGray
+	},
+
+	Z: {
+		x: 12,
+		y: 2,
+		color: Reg.colorGray
+	},
+
+	ladderUp: {
+		x: 13,
+		y: 2,
+		color: Reg.colorGray
+	},
+
+	ladderDown: {
+		x: 14,
 		y: 2,
 		color: Reg.colorGray
 	},
@@ -342,6 +354,103 @@ const Tiles = {
 		y: 3,
 		color: Reg.colorWhite
 	},
+
+	jester: {
+		x: 11,
+		y: 3,
+		color: Reg.colorWhite
+	},
+
+	merchant: {
+		x: 12,
+		y: 3,
+		color: Reg.colorWhite
+	},
+
+	guard: {
+		x: 13,
+		y: 3,
+		color: Reg.colorWhite
+	},
+
+	guard2: {
+		x: 14,
+		y: 3,
+		color: Reg.colorWhite
+	},
+
+	british: {
+		x: 15,
+		y: 3,
+		color: Reg.colorWhite
+	},
+
+	orc: {
+		x: 0,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	daemon: {
+		x: 1,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	devil: {
+		x: 2,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	balron: {
+		x: 4,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	serpent: {
+		x: 4,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	beholder: {
+		x: 5,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	ghost: {
+		x: 6,
+		y: 4,
+		color: Reg.colorGray
+	},
+
+	viper: {
+		x: 7,
+		y: 4,
+		color: Reg.colorWhite
+	},
+
+	gremlin: {
+		x: 8,
+		y: 4,
+		color: Reg.colorWhite
+	},
+
+	daemonBig: {
+		x: 9,
+		y: 4,
+		color: Reg.colorWhite
+	},
+
+	balrog: {
+		x: 10,
+		y: 4,
+		color: Reg.colorWhite
+	},
+
 
 
 }

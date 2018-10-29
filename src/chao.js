@@ -10,7 +10,7 @@
 var chao = {
 
 	/** Consts. */
-	VERSION					: "0.21",
+	VERSION					: "0.23b",
 
 	SCALING_MODE_NONE		: 0,	// Game canvas will not be scaled at all.
 	SCALING_MODE_STRETCH	: 1,	// Scales the canvas to fill the whole viewport.
@@ -18,7 +18,7 @@ var chao = {
 	SCALING_MODE_EXTEND		: 3,	// Scale to fit and lenghten the shorter dimension to fill the viewport.
 	SCALING_MODE_END		: 4,
 
-	INTERPOLATE_LINEAR		: 0,	// Basing interpolation, without any smoothing.
+	INTERPOLATE_LINEAR		: 0,	// Basic interpolation, without any smoothing.
 	INTERPOLATE_SMOOTH		: 1,	// Smooooooth!
 	INTERPOLATE_EASE_TO		: 2,	// Smoothes the end of the interpolation.
 	INTERPOLATE_EASE_FROM	: 3,	// Smoothes the beginning of the interpolation.
@@ -1483,8 +1483,10 @@ var chao = {
 	 * Handles mouse clicks and the first touch input, which is handled like the left mouse button.
 	 *
 	 * @param button - Id of a button that is being handled. (1 - left, 2 - middle, 3 - right)
+	 * @param x - X position of the pointer, from the left edge of the viewport.
+	 * @param y - Y position of the pointer, from the top edge of the viewport.
 	 */
-	handleMouseDown: function(button){
+	handleMouseDown: function(button, x, y){
 		chao.resumeMusicPlaybackIfNeeded();
 
 		if(chao.mouse.suppressUntilUp){
@@ -1553,18 +1555,20 @@ var chao = {
 		chao.mouse.x = x;
 		chao.mouse.y = y;
 
-		var currentEntity = chao.getEntityUnderMouse();
-		if(currentEntity != chao.focusedEntity){
-			if(chao.focusedEntity && !chao.focusedEntity.keepClickFocus){
-				chao.focusedEntity.onCancel();
+		if(chao.mouse.pressed){
+			var currentEntity = chao.getEntityUnderMouse();
+			if(currentEntity != chao.focusedEntity){
+				if(chao.focusedEntity && !chao.focusedEntity.keepClickFocus){
+					chao.focusedEntity.onCancel();
+				}
+				if(!chao.focusedEntity || !chao.focusedEntity.keepClickFocus){
+					chao.focusedEntity = currentEntity;
+				}
 			}
-			if(!chao.focusedEntity || !chao.focusedEntity.keepClickFocus){
-				chao.focusedEntity = currentEntity;
-			}
-		}
 
-		if(chao.focusedEntity){
-			chao.focusedEntity.onMove();
+			if(chao.focusedEntity){
+				chao.focusedEntity.onMove();
+			}
 		}
 	},
 
@@ -1574,7 +1578,7 @@ var chao = {
 	 * @param e - Event passed by the Event Listener.
 	 */
 	onMouseDown: function(e){
-		chao.handleMouseDown(e.which);
+		chao.handleMouseDown(e.which, e.offsetX, e.offsetY);
 		e.preventDefault();
 	},
 
@@ -1645,7 +1649,7 @@ var chao = {
 			chao.touches.push(newTouch);
 
 			if(newTouch.isMouse){
-				chao.handleMouseDown(1);
+				chao.handleMouseDown(1, newTouch.x, newTouch.y);
 				chao.handleMouseMove(newTouch.x, newTouch.y);
 			}
 		}
@@ -2057,11 +2061,7 @@ var chao = {
 			}
 		}
 
-		if(intersections & 1 == 1){
-			return true;
-		}
-
-		return false;
+		return intersections & 1 == 1;
 	},
 
 	/**
@@ -2165,8 +2165,16 @@ var chao = {
 		entityLog += " p:" + Math.ceil(entity.x) + "x" + Math.ceil(entity.y);
 		entityLog += " s:" + Math.ceil(entity.width) + "x" + Math.ceil(entity.height);
 
-		for(var i = 0; i < entity.children.length; ++i){
-			entityLog += chao.logEntity(entity.children[i], indent + 1);
+		if(!entity.foldInLog){
+			for(var i = 0; i < entity.children.length; ++i){
+				entityLog += chao.logEntity(entity.children[i], indent + 1);
+			}
+		} else {
+			entityLog += "\n";
+			for(var i = 0; i < indent + 1; ++i){
+				entityLog += "  ";
+			}
+			entityLog += "(...)";
 		}
 
 		return "\n" + entityLog;
@@ -2462,7 +2470,8 @@ var chao = {
 				newButton.setImagePressed(imagePressed);
 			}
 
-			if(font && fontSize && text){
+			if(font && fontSize){
+				text = text || "";
 				newButton.setText(text, font, fontSize);
 			}
 
@@ -2551,6 +2560,8 @@ function Entity(name, x, y){
 	this.paused			= false,			// When true, no updates will happen for this entity, its components and all the children.
 	this.clickable 		= false,			// When true, this entity will receive mouse/touch input events.
 	this.keepClickFocus	= false; 			// When true, the entity will keep the click focus even when the pointer slides off it. when false, the onCancel will be called when pointer slides off.
+
+	this.foldInLog		= false;			// When true, the chao.logEntity method won't print this entity's children.
 
 	/**
 	 * Destroys all children and components sticked to this entity.
@@ -2734,8 +2745,8 @@ function Entity(name, x, y){
 	 * Called when this entity is clicked. Tries to call onClick on all its children.
 	 */
 	this.onClick = function(){
-		var relativeX = chao.mouse.x - this.x;
-		var relativeY = chao.mouse.y - this.y;
+		var relativeX = chao.mouse.x - this.getScreenX();
+		var relativeY = chao.mouse.y - this.getScreenY();
 		for(var i = 0; i < this.components.length; ++i){
 			if(this.components[i].onClick){
 				this.components[i].onClick(relativeX, relativeY);
@@ -2747,8 +2758,8 @@ function Entity(name, x, y){
 	 * Called when this entity is clicked and the pointer moves around. Tries to call onMove on all its children.
 	 */
 	this.onMove = function(){
-		var relativeX = chao.mouse.x - this.x;
-		var relativeY = chao.mouse.y - this.y;
+		var relativeX = chao.mouse.x - this.getScreenX();
+		var relativeY = chao.mouse.y - this.getScreenY();
 		for(var i = 0; i < this.components.length; ++i){
 			if(this.components[i].onMove){
 				this.components[i].onMove(relativeX, relativeY);
@@ -2771,8 +2782,8 @@ function Entity(name, x, y){
 	 * Called when the mouse/touch input on this entity is released. Tries to call onRelease on all its children.
 	 */
 	this.onRelease = function(){
-		var relativeX = chao.mouse.x - this.x;
-		var relativeY = chao.mouse.y - this.y;
+		var relativeX = chao.mouse.x - this.getScreenX();
+		var relativeY = chao.mouse.y - this.getScreenY();
 		for(var i = 0; i < this.components.length; ++i){
 			if(this.components[i].onRelease){
 				this.components[i].onRelease(relativeX, relativeY);
@@ -2877,6 +2888,20 @@ function Entity(name, x, y){
 		}
 
 		return null;
+	}
+
+	/**
+	 * Checks if this entity is visible. Takes visibility of the parent entities into consideration.
+	 *
+	 * @return - True if this entity is visible in the hierarchy.
+	 */
+	this.isVisible = function(){
+
+		if(this.parent != null){
+			return this.visible && this.parent.isVisible();
+		}
+
+		return this.visible;
 	}
 
 	/**
@@ -3324,22 +3349,22 @@ ComponentText.prototype = {
  * @param image - Name/id of the image to be used.
  */
 function ComponentButton(image){
-	this.name 			= "Button";		// Name by which this component is identified.
-	this.entity 		= null;			// The Entity this component is attached to.
-	this.imageKey 		= image;		// Name of the image used as this button's graphic.
-	this.image 			= null;			// Image used as this button's graphic.
-	this.imagePressed 	= null;			// Image used as this button's pressed state graphic.
-	this.text 			= null;			// Text displayed on top this button.
+	this.name 					= "Button";		// Name by which this component is identified.
+	this.entity 				= null;			// The Entity this component is attached to.
+	this.imageKey 				= image;		// Name of the image used as this button's graphic.
+	this.image 					= null;			// Image used as this button's graphic.
+	this.imagePressed 			= null;			// Image used as this button's pressed state graphic.
+	this.text 					= null;			// Text displayed on top this button.
 
-	this.disableDim		= false;		// When false and imagePressed is not set, the button will react to a press by dimming itself.
-	this.disabled 		= false;		// When true, the button will ignore all input.
-	this.dimInactive 	= true;			// When true, the button will be dimmed when disabled.
+	this.disableDim				= false;		// When false and imagePressed is not set, the button will react to a press by dimming itself.
+	this.disabled 				= false;		// When true, the button will ignore all input.
+	this.dimInactive 			= true;			// When true, the button will be dimmed when disabled.
 
-	this.onPress 		= function(button) {};	// Function called when this button is pressed.
-	this.onHold 		= function(button) {};	// Function called when this button stays pressed.
-	this.onReleased 	= function(button) {};	// Function called when this button stops being pressed.
+	this.onPress 				= function(button) {};	// Function called when this button is pressed.
+	this.onHold 				= function(button) {};	// Function called when this button stays pressed.
+	this.onReleased 			= function(button) {};	// Function called when this button stops being pressed.
 
-	this.pressed 		= false;
+	this.pressed 				= false;
 
 	/**
 	 * A constructor of sorts. Called when the component is added to an entity.
@@ -3369,6 +3394,8 @@ function ComponentButton(image){
 				buttonAlpha = 1.0;
 				if(this.onReleased){
 					this.onReleased(this);
+					// hacky supress any other releases
+					chao.mouse.justReleased = false;
 				}
 			}
 
@@ -3417,6 +3444,7 @@ function ComponentButton(image){
 		this.imageKey = key;
 
 		this.image = (new Entity("Button Image")).addComponent(new ComponentImage(this.imageKey));
+		this.image.entity.clickable = false;
 		this.entity.add(this.image.entity);
 
 		this.updateSize();
@@ -3433,6 +3461,7 @@ function ComponentButton(image){
 		}
 
 		this.imagePressed = (new Entity("Button Image Pressed")).addComponent(new ComponentImage(key));
+		this.imagePressed.entity.clickable = false;
 		this.entity.add(this.imagePressed.entity);
 		this.imagePressed.entity.visible = false;
 	}
@@ -3448,6 +3477,7 @@ function ComponentButton(image){
 		if(!this.text){
 			this.text = (new Entity("Button Text", 0, 0)).addComponent(new ComponentText(font, text, size));
 			this.text.align = "left";
+			this.text.entity.clickable = false;
 			this.entity.add(this.text.entity);
 		} else {
 			if(font) this.text.font = font;
@@ -3480,7 +3510,7 @@ function ComponentButton(image){
 			return false;
 		}
 
-		return this.entity.getEntityAt(x, y) === this.entity;
+		return chao.getCurrentState().rootEntity.getEntityAt(x, y) === this.entity;
 	}
 
 }
@@ -3509,6 +3539,7 @@ function ComponentCamera(){
 	 */
 	this.update = function(){
 		if(this.trackedEntity == null){
+			this.clampToBounds(this.entity);
 			this.addPositionToBuffer(this.entity.x, this.entity.y);
 			return;
 		}
@@ -3557,12 +3588,7 @@ function ComponentCamera(){
 		}
 
 		// clamping camera position to the set bounds
-		if(this.bounds.width > 0){
-			cameraPos.x = -chao.clamp(-cameraPos.x, this.bounds.x, (this.bounds.x+this.bounds.width)-chao.screenWidth);
-		}
-		if(this.bounds.height > 0){
-			cameraPos.y = -chao.clamp(-cameraPos.y, this.bounds.y, (this.bounds.y+this.bounds.height)-chao.screenHeight);
-		}
+		this.clampToBounds(cameraPos);
 
 		// smoothing the camera movement
 		this.addPositionToBuffer(cameraPos.x, cameraPos.y);
@@ -3639,6 +3665,15 @@ function ComponentCamera(){
 		this.trackPositionBuffer.push( {x:x, y:y} );
 		while(this.trackPositionBuffer.length > this.trackSmoothness){
 			this.trackPositionBuffer.splice(0, 1);
+		}
+	}
+
+	this.clampToBounds = function(cameraPos){
+		if(this.bounds.width > 0){
+			cameraPos.x = -chao.clamp(-cameraPos.x, this.bounds.x, (this.bounds.x+this.bounds.width)-chao.screenWidth);
+		}
+		if(this.bounds.height > 0){
+			cameraPos.y = -chao.clamp(-cameraPos.y, this.bounds.y, (this.bounds.y+this.bounds.height)-chao.screenHeight);
 		}
 	}
 }
@@ -3725,7 +3760,7 @@ function ComponentParticle(image){
 	}
 }
 ComponentParticle.FADE_MODE_NONE		= 0; // No fade at all shall be applied.
-ComponentParticle.FADE_MODE_LINEAR		= 1; // The particle will progressively.
+ComponentParticle.FADE_MODE_LINEAR		= 1; // The particle will fade progressively.
 ComponentParticle.FADE_MODE_LAST_SECOND	= 2; // The particle will fade in span of the last second of its life.
 
 /**
@@ -3768,7 +3803,7 @@ function ComponentShake(force, time, damped){
 				return;
 			}
 
-			// Put this component at the end if it's not. So we can take into account the position changes made by other components.
+			// Put this component at the end if it's not already. So we can take the position changes made by other components into account.
 			var id = this.entity.components.indexOf(this);
 			if(id != this.entity.components.length-1){
 				this.entity.components.splice(id, 1);

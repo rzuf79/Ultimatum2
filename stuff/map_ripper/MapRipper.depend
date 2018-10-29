@@ -1,0 +1,5 @@
+# depslib dependency file v1.0
+1540741453 source:/home/zrfu/dev/Ultimatum2/stuff/map_ripper/main.cpp
+	<SFML/Graphics.hpp>
+	<math.h>
+

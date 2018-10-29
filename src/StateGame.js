@@ -35,6 +35,19 @@ function StateGame(){
 		if(chao.justPressed[chao.KEY_L]){
 			chao.logHierarchy(this.rootEntity);
 		}
+
+		if(chao.keys[chao.KEY_UP]){
+			this.camera.entity.y += chao.getTimeDelta() * 50;
+		}
+		if(chao.keys[chao.KEY_DOWN]){
+			this.camera.entity.y -= chao.getTimeDelta() * 50;
+		}
+		if(chao.keys[chao.KEY_LEFT]){
+			this.camera.entity.x += chao.getTimeDelta() * 50;
+		}
+		if(chao.keys[chao.KEY_RIGHT]){
+			this.camera.entity.x -= chao.getTimeDelta() * 50;
+		}
 	}
 
 	this.draw = function(){
