@@ -25,6 +25,11 @@ function StateGame(){
 
 		this.location.loadLocation("newSanAntonio");
 
+		this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, 32, 62));
+		this.camera.entity.add(this.ludzik.entity);
+
+		this.camera.follow(this.ludzik.entity, chao.framerate/2);
+
 	}
 
 	this.resize = function(){
@@ -36,17 +41,20 @@ function StateGame(){
 			chao.logHierarchy(this.rootEntity);
 		}
 
-		if(chao.keys[chao.KEY_UP]){
-			this.camera.entity.y += chao.getTimeDelta() * 50;
-		}
-		if(chao.keys[chao.KEY_DOWN]){
-			this.camera.entity.y -= chao.getTimeDelta() * 50;
-		}
-		if(chao.keys[chao.KEY_LEFT]){
-			this.camera.entity.x += chao.getTimeDelta() * 50;
-		}
-		if(chao.keys[chao.KEY_RIGHT]){
-			this.camera.entity.x -= chao.getTimeDelta() * 50;
+		// debug camera controls
+		if(false){
+			if(chao.keys[chao.KEY_UP]){
+				this.camera.entity.y += chao.getTimeDelta() * 50;
+			}
+			if(chao.keys[chao.KEY_DOWN]){
+				this.camera.entity.y -= chao.getTimeDelta() * 50;
+			}
+			if(chao.keys[chao.KEY_LEFT]){
+				this.camera.entity.x += chao.getTimeDelta() * 50;
+			}
+			if(chao.keys[chao.KEY_RIGHT]){
+				this.camera.entity.x -= chao.getTimeDelta() * 50;
+			}
 		}
 	}
 

@@ -5,6 +5,7 @@ function ComponentLocation(game){
 	this.imageLocation 		= null;
 
 	this.tiles 				= [];
+	this.currentLocation	= null;
 
 	this.tileNames			= [];
 	this.tileSymbols		= [];
@@ -15,7 +16,7 @@ function ComponentLocation(game){
 		this.tileNames 		= Object.keys(Maps.symbols);
 		this.tileSymbols 	= Object.values(Maps.symbols);
 
-		var tileset = chao.getImage("tiles");
+		var tilesAtlas = chao.getImage("tiles");
 
 		for(var i = 0; i < this.tileNames.length; ++i){
 			var newTile 	= chao.createImage(this.tileNames[i], Reg.TILE_W, Reg.TILE_H);
@@ -26,7 +27,7 @@ function ComponentLocation(game){
 				height: Reg.TILE_H
 			}
 
-			chao.drawImagePart(newTile, tileset, 0, 0, tileRect);
+			chao.drawImagePart(newTile, tilesAtlas, 0, 0, tileRect);
 			chao.tintImage(newTile, Tiles[this.tileNames[i]].color);
 
 			this.tiles.push(newTile);
@@ -63,13 +64,33 @@ function ComponentLocation(game){
 					chao.log("Unrecognized map symbol: \"" + symbol + "\"");
 				}
 
-				var image 		= this.tiles[symbolIdx];
+				var image = this.tiles[symbolIdx];
 
 				chao.drawImage(locationCanvas, image, i*Reg.TILE_W, j*Reg.TILE_H);
 			}
 		}
 
 		this.imageLocation.setImage(locationCanvas);
+
+		this.currentLocation = newLocation;
+	}
+
+	this.getTileSymbol = function(x, y){
+		return this.currentLocation.map[y][x];
+	}
+
+	this.getTile = function(x, y){
+		var idx = this.tileSymbols.indexOf(this.getTileSymbol(x, y));
+		return Tiles[this.tileNames[idx]];
+	}
+
+	this.getTileName = function(x, y){
+		var idx = this.tileSymbols.indexOf(this.getTileSymbol(x, y));
+		return this.tileNames[idx];
+	}
+
+	this.isPassable = function(x, y){
+		return this.getTile(x, y).passable;
 	}
 
 }
