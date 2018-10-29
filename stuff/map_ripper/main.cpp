@@ -32,8 +32,8 @@ char getTileFrom(sf::Image img, unsigned int tileX, unsigned int tileY){
             case 8907840: return '|';  //portal
             case 2325120: return ':';  //village
             case 5139840: return '?';  //signpost
-            case 147829440: return '*';  //dungeon
-            case 10730607840: return '!';  //tower
+            case 3886080: return '*';  //dungeon
+            case 5444160: return '!';  //tower
             case 1140480: return '`';  //swamp
             case 15667200: return '#';  //wall
             case 2030080: return ',';  //road

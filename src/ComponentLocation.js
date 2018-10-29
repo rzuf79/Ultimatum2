@@ -12,6 +12,7 @@ function ComponentLocation(game){
 
 	this.waterTileY			= 0;
 	this.imageWater			= null;
+	this.imageForceField	= null;
 
 	this.create = function(){
 		this.imageLocation = this.entity.addComponent(new ComponentImage());
@@ -41,7 +42,8 @@ function ComponentLocation(game){
 			this.tiles.push(newTile);
 		}
 
-		this.imageWater = chao.createImage("water_tile", Reg.TILE_W, Reg.TILE_H);
+		this.imageWater 		= chao.createImage("water_tile", Reg.TILE_W, Reg.TILE_H);
+		this.imageForceField 	= chao.createImage("force_field_tile", Reg.TILE_W, Reg.TILE_H);
 	}
 
 	this.destroy = function(){
@@ -62,6 +64,10 @@ function ComponentLocation(game){
 		var waterImage = chao.getImage("water");
 		chao.drawImage(this.imageWater, waterImage, 0, this.waterTileY);
 		chao.drawImage(this.imageWater, waterImage, 0, this.waterTileY-Reg.TILE_H);
+
+		var forceFieldImage = chao.getImage("forceField");
+		chao.drawImage(this.imageForceField, forceFieldImage, 0, this.waterTileY);
+		chao.drawImage(this.imageForceField, forceFieldImage, 0, this.waterTileY-Reg.TILE_H);
 
 	}
 
@@ -93,6 +99,8 @@ function ComponentLocation(game){
 				
 				if(symbol === "~"){
 					this.addWater(i, j, this.imageWater);
+				} else if(symbol === "="){
+					this.addWater(i, j, this.imageForceField);
 				}
 			}
 		}
