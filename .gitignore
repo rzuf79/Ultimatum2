@@ -1,0 +1,5 @@
+# MapRipper code::blocks project files and binaries
+stuff/map_ripper/bin*
+stuff/map_ripper/obj*
+stuff/map_ripper/MapRipper.depend
+stuff/map_ripper/MapRipper.layout
