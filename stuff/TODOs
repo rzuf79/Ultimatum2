@@ -1,8 +1,11 @@
 Piotr's TODOs
 
-- animated tiles (for water and force fields)
+v animated tiles (for water and force fields)
 - convert all the locations to ascii
 - traveling between locations
+- conceive some clever way of looping the overworld maps
+- optimize the animated tiles to work with looped maps
+- uh, actually all dynamic objects should work with the looped overworld maps
 - in-game messages (we have to display the magnificent "HEX-E-POO" line somewhere, right?)
 - inventory
 - character stats
