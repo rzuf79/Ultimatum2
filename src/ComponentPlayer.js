@@ -29,16 +29,16 @@ function ComponentPlayer(game, x, y){
 
 	this.update = function(){
 		var moveDir = "";
-		if(chao.keys[chao.KEY_UP]){
+		if(chao.pressed[chao.KEY_UP]){
 			moveDir = "n";
 		}
-		if(chao.keys[chao.KEY_DOWN]){
+		if(chao.pressed[chao.KEY_DOWN]){
 			moveDir = "s";
 		}
-		if(chao.keys[chao.KEY_LEFT]){
+		if(chao.pressed[chao.KEY_LEFT]){
 			moveDir = "w";
 		}
-		if(chao.keys[chao.KEY_RIGHT]){
+		if(chao.pressed[chao.KEY_RIGHT]){
 			moveDir = "e";
 		}
 

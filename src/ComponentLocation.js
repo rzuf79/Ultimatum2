@@ -15,7 +15,8 @@ function ComponentLocation(game){
 	this.imageForceField	= null;
 
 	this.create = function(){
-		this.imageLocation = this.entity.addComponent(new ComponentImage());
+		this.imageLocation = this.entity.addComponent(new ComponentSprite());
+		this.imageLocation.entity.setPivot(0, 0);
 
 		this.tileNames 		= Object.keys(Maps.symbols);
 		this.tileSymbols 	= Object.values(Maps.symbols);
@@ -97,11 +98,11 @@ function ComponentLocation(game){
 				var image = this.tiles[symbolIdx];
 				chao.drawImage(locationCanvas, image, i*Reg.TILE_W, j*Reg.TILE_H);
 				
-				if(symbol === "~"){
-					this.addWater(i, j, this.imageWater);
-				} else if(symbol === "="){
-					this.addWater(i, j, this.imageForceField);
-				}
+				// if(symbol === "~"){
+				// 	this.addWater(i, j, this.imageWater);
+				// } else if(symbol === "="){
+				// 	this.addWater(i, j, this.imageForceField);
+				// }
 			}
 		}
 
@@ -111,7 +112,7 @@ function ComponentLocation(game){
 	}
 
 	this.addWater = function(x, y, image){
-		var waterTile = chao.helpers.createImage("Water", image, x*Reg.TILE_W, y*Reg.TILE_H);
+		var waterTile = chao.helpers.createSprite(undefined, "Water", image, x*Reg.TILE_W, y*Reg.TILE_H);
 		this.entity.add(waterTile.entity);
 		this.specialTiles.push(waterTile.entity);
 	}

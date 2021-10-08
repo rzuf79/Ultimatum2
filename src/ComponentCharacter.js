@@ -11,8 +11,9 @@ function ComponentCharacter(game, tileName){
 	this.y 					= 0;
 
 	this.create = function(){
-		this.sprite = this.entity.addComponent(new ComponentImage());
+		this.sprite = this.entity.addComponent(new ComponentSprite());
 		this.sprite.setImage(chao.createImage(undefined, Reg.TILE_W, Reg.TILE_H));
+		this.sprite.entity.setPivot(0, 0);
 
 		var tileRect	= {
 			x: Tiles[this.tileName].x * Reg.TILE_W,

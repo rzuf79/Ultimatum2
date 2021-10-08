@@ -23,12 +23,14 @@ function StateGame(){
 		this.location = (new Entity("Location")).addComponent(new ComponentLocation(this));
 		this.camera.entity.add(this.location.entity);
 
-		this.location.loadLocation("castleBritish");
+		// this.location.loadLocation("castleBritish");
+		this.location.loadLocation("castleBarataria");
 
 		this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, 32, 62));
 		this.camera.entity.add(this.ludzik.entity);
 
-		this.camera.follow(this.ludzik.entity, chao.framerate/2);
+		this.camera.follow(this.ludzik.entity, 2.0);
+		this.camera.snapToFollowed();
 
 	}
 
@@ -43,16 +45,16 @@ function StateGame(){
 
 		// debug camera controls
 		if(false){
-			if(chao.keys[chao.KEY_UP]){
+			if(chao.pressed[chao.KEY_UP]){
 				this.camera.entity.y += chao.getTimeDelta() * 50;
 			}
-			if(chao.keys[chao.KEY_DOWN]){
+			if(chao.pressed[chao.KEY_DOWN]){
 				this.camera.entity.y -= chao.getTimeDelta() * 50;
 			}
-			if(chao.keys[chao.KEY_LEFT]){
+			if(chao.pressed[chao.KEY_LEFT]){
 				this.camera.entity.x += chao.getTimeDelta() * 50;
 			}
-			if(chao.keys[chao.KEY_RIGHT]){
+			if(chao.pressed[chao.KEY_RIGHT]){
 				this.camera.entity.x -= chao.getTimeDelta() * 50;
 			}
 		}
