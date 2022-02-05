@@ -13,7 +13,7 @@ function ComponentTile(game, tileName){
 		//
 	}
 
-	this.draw = function(x, y, alpha){
+	this.draw = function(){
 		//
 	}
 

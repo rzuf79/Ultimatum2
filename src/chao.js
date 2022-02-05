@@ -1746,7 +1746,14 @@ var chao = {
             x: x,
             y: y,
             width: width,
-            height: height
+            height: height,
+
+            intersects(rect2) {
+                return !(rect2.x > this.x + this.width 
+                        || rect2.x + rect2.width < this.x
+                        || rect2.y > this.y + this.height
+                        || rect2.y + rect2.height < this.y);
+            },
         };
     },
 
@@ -3766,11 +3773,15 @@ function ComponentCamera() {
         this.trackedEntity = null;
     };
 
+    this.snapToPosition = function(x, y) {
+        this.entity.x = x;
+        this.entity.y = y;
+    };
+
     this.snapToFollowed = function() {
         var cameraPos = this.getCameraTargetPosition();
-        this.entity.x = cameraPos.x;
-        this.entity.y = cameraPos.y;
-    }
+        this.snapToPosition(cameraPos.x, cameraPos.y);
+    };
 
     this.slideToPosition = function(x, y, time, interpolationType, callback) {
         interpolationType = interpolationType !== undefined ? interpolationType : chao.INTERPOLATE_SMOOTH;
@@ -3799,6 +3810,20 @@ function ComponentCamera() {
         this.bounds.y = y;
         this.bounds.width = width;
         this.bounds.height = height;
+    };
+
+    this.resetBounds = function() {
+        this.setBounds(0, 0, -1, -1);
+    };
+
+    this.isRectVisible = function(rect) {
+        var entity = this.entity;
+        var visibleRect = chao.makeRect(
+                -entity.x,
+                -entity.y,
+                chao.screenWidth,
+                chao.screenHeight);
+        return visibleRect.intersects(rect);
     };
 
     this.clampToBounds = function(cameraPos) {

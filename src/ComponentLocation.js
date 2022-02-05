@@ -1,4 +1,4 @@
-function ComponentLocation(game) {
+function ComponentLocation(game, camera) {
     this.name = "Location";
     this.entity = null;
 
@@ -7,6 +7,7 @@ function ComponentLocation(game) {
     this.tileSymbols = [];
 
     this.imageLocation = null;
+    this.locationSize = { x: 0, y: 0};
     this.currentLocation = null;
     this.specialTiles = [];
 
@@ -15,8 +16,9 @@ function ComponentLocation(game) {
     this.imageForceField = null;
 
     this.create = function() {
-        this.imageLocation = this.entity.addComponent(new ComponentSprite());
-        this.imageLocation.entity.setPivot(0, 0);
+        this.locationSize.x = 64 * Reg.TILE_W;
+        this.locationSize.y = 64 * Reg.TILE_H;
+        this.imageLocation = chao.createImage(undefined, this.locationSize.x, this.locationSize.y);
 
         this.tileNames = Object.keys(Maps.symbols);
         this.tileSymbols = Object.values(Maps.symbols);
@@ -51,8 +53,27 @@ function ComponentLocation(game) {
         //
     }
 
-    this.draw = function(x, y, alpha) {
-        //
+    this.draw = function() {
+        var entity = this.entity;
+
+        chao.drawImage(chao.canvas, this.imageLocation, entity.screenX, entity.screenY);
+
+        if (this.currentLocation.looped) {
+            var size = this.locationSize;
+            
+            var rects = [ 
+                chao.makeRect(0, -size.y, size.x, size.y),
+                chao.makeRect(0, size.y, size.x, size.y),
+                chao.makeRect(-size.x, 0, size.x, size.y),
+                chao.makeRect(size.x, 0, size.x, size.y),
+            ];
+            
+            for (var i = 0; i < rects.length; ++i) {
+                if (camera.isRectVisible(rects[i])) {
+                    chao.drawImage(chao.canvas, this.imageLocation, entity.screenX + rects[i].x, entity.screenY + rects[i].y );
+                }
+            }
+        }
     }
 
     this.update = function() {
@@ -82,9 +103,10 @@ function ComponentLocation(game) {
         var newLocation = Maps[locationName];
         var width = newLocation.map[0].length;
         var height = newLocation.map.length;
-        var locationCanvas = chao.createImage(undefined, width * Reg.TILE_W, height * Reg.TILE_H);
+        
+        this.imageLocation = chao.createImage(undefined, width * Reg.TILE_W, height * Reg.TILE_H);
 
-        this.imageLocation.setImage(locationCanvas);
+        // this.imageLocation.setImage(locationCanvas);
 
         for (var i = 0; i < width; ++i) {
             for (var j = 0; j < height; ++j) {
@@ -96,7 +118,7 @@ function ComponentLocation(game) {
                 }
 
                 var image = this.tiles[symbolIdx];
-                chao.drawImage(locationCanvas, image, i * Reg.TILE_W, j * Reg.TILE_H);
+                chao.drawImage(this.imageLocation, image, i * Reg.TILE_W, j * Reg.TILE_H);
 
                 // if(symbol === "~"){
                 // 	this.addWater(i, j, this.imageWater);
@@ -106,7 +128,13 @@ function ComponentLocation(game) {
             }
         }
 
-        this.imageLocation.setImage(locationCanvas);
+        // this.imageLocation.setImage(locationCanvas);
+
+        if (newLocation.looped) {
+            camera.resetBounds();
+        } else {
+            camera.setBounds(0, 0, this.imageLocation.width, this.imageLocation.height);
+        }
 
         this.currentLocation = newLocation;
     }
@@ -132,6 +160,13 @@ function ComponentLocation(game) {
     }
 
     this.isPassable = function(x, y) {
+        var looped = this.currentLocation.looped;
+
+        if (x < 0) x = 63;
+        if (x > 63) x = 0;
+        if (y < 0) y = 63;
+        if (y > 63) y = 0;
+        
         return this.getTile(x, y).passable;
     }
 

@@ -12,7 +12,7 @@ function ComponentStats(){
 		//
 	}
 
-	this.draw = function(x, y, alpha){
+	this.draw = function(){
 		//
 	}
 

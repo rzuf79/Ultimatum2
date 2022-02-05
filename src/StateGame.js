@@ -20,16 +20,20 @@ function StateGame() {
         this.camera = (new Entity("Camera")).addComponent(new ComponentCamera());
         this.groupWorld.add(this.camera.entity);
 
-        this.location = (new Entity("Location")).addComponent(new ComponentLocation(this));
+        this.location = (new Entity("Location")).addComponent(new ComponentLocation(this, this.camera));
         this.camera.entity.add(this.location.entity);
 
-        // this.location.loadLocation("castleBritish");
-        this.location.loadLocation("castleBarataria");
+        if (false) {
+            this.location.loadLocation("castleBarataria");
+            this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 32, 62));
+        } else {
+            this.location.loadLocation("bc1423");
+            this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 16, 17));
+        }
 
-        this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, 32, 62));
         this.camera.entity.add(this.ludzik.entity);
 
-        this.camera.follow(this.ludzik.entity, 2.0);
+        this.camera.follow(this.ludzik.entity, 4.0);
         this.camera.snapToFollowed();
 
     }

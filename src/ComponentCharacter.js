@@ -2,7 +2,7 @@ function ComponentCharacter(game, tileName) {
     this.name = "Character";
     this.entity = null;
 
-    this.game = game;
+    this.looped = chao.makeSignal(); // (loopedFrom - "n"/"s"/"w"/"e")
 
     this.tileName = tileName;
     this.sprite = null;
@@ -29,7 +29,7 @@ function ComponentCharacter(game, tileName) {
         //
     }
 
-    this.draw = function(x, y, alpha) {
+    this.draw = function() {
         //
     }
 
@@ -65,14 +65,35 @@ function ComponentCharacter(game, tileName) {
                 break;
         }
 
-        if (this.game.location.isPassable(newPos.x, newPos.y)) {
+        if (game.location.isPassable(newPos.x, newPos.y)) {
             this.x = newPos.x;
             this.y = newPos.y;
+
+            var loopBorder = "";
+            if (this.x < 0) {
+                this.x = 63;
+                loopBorder = "w";
+            } else if (this.x > 63) {
+                this.x = 0;
+                loopBorder = "e";
+            }
+            if (this.y < 0) {
+                this.y = 63;
+                loopBorder = "n";
+            } else if (this.y > 63) {
+                this.y = 0;
+                loopBorder = "s";
+            }
+
+            if (loopBorder.length > 0) {
+                this.looped.fire(loopBorder);
+            }
+
             this.updatePosition();
             return true;
         }
 
-        return this.game.location.getTileName(newPos.x, newPos.y);
+        return game.location.getTileName(newPos.x, newPos.y);
     }
 
 }
