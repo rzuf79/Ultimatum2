@@ -3805,6 +3805,10 @@ function ComponentCamera() {
         this.slideTweens = [];
     };
 
+    this.getVisibleRect = function() {
+        return chao.makeRect( -this.entity.x, -this.entity.y, chao.screenWidth, chao.screenHeight);
+    };
+
     this.setBounds = function(x, y, width, height) {
         this.bounds.x = x;
         this.bounds.y = y;
@@ -3817,13 +3821,7 @@ function ComponentCamera() {
     };
 
     this.isRectVisible = function(rect) {
-        var entity = this.entity;
-        var visibleRect = chao.makeRect(
-                -entity.x,
-                -entity.y,
-                chao.screenWidth,
-                chao.screenHeight);
-        return visibleRect.intersects(rect);
+        return this.getVisibleRect().intersects(rect);
     };
 
     this.clampToBounds = function(cameraPos) {

@@ -36,6 +36,8 @@ function StateGame() {
         this.camera.follow(this.ludzik.entity, 4.0);
         this.camera.snapToFollowed();
 
+        chao.helpers.createFpsCounter(this.groupGUI, 25);
+
     }
 
     this.resize = function() {

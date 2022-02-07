@@ -9,9 +9,8 @@ function ComponentLocation(game, camera) {
     this.imageLocation = null;
     this.locationSize = { x: 0, y: 0};
     this.currentLocation = null;
-    this.specialTiles = [];
 
-    this.waterTileY = 0;
+    this.animatedTileY = 0;
     this.imageWater = null;
     this.imageForceField = null;
 
@@ -55,8 +54,10 @@ function ComponentLocation(game, camera) {
 
     this.draw = function() {
         var entity = this.entity;
+        var screenPos = { x : entity.screenX, y : entity.screenY };
 
-        chao.drawImage(chao.canvas, this.imageLocation, entity.screenX, entity.screenY);
+        // main location image
+        chao.drawImage(chao.canvas, this.imageLocation, screenPos.x, screenPos.y);
 
         if (this.currentLocation.looped) {
             var size = this.locationSize;
@@ -70,36 +71,55 @@ function ComponentLocation(game, camera) {
             
             for (var i = 0; i < rects.length; ++i) {
                 if (camera.isRectVisible(rects[i])) {
-                    chao.drawImage(chao.canvas, this.imageLocation, entity.screenX + rects[i].x, entity.screenY + rects[i].y );
+                    chao.drawImage(chao.canvas, this.imageLocation, screenPos.x + rects[i].x, screenPos.y + rects[i].y );
                 }
             }
         }
+
+        // draw animated tiles
+        {
+            var visibleRect = camera.getVisibleRect();
+            visibleRect.x = Math.ceil(visibleRect.x / Reg.TILE_W);
+            visibleRect.y = Math.ceil(visibleRect.y / Reg.TILE_H);
+            visibleRect.width = Math.ceil(visibleRect.width / Reg.TILE_W);
+            visibleRect.height = Math.ceil(visibleRect.height / Reg.TILE_H);
+            for(x = visibleRect.x - 1; x < visibleRect.x + visibleRect.width; ++x) {
+                var tx = x >= 0 ? x : x + 64;
+                tx %= 64;
+                var drawX = tx * Reg.TILE_W;
+                for(y = visibleRect.y - 1; y < visibleRect.y + visibleRect.height; ++y) {
+                    var ty = y >= 0 ? y : y + 64;
+                    ty %= 64;
+                    var drawY = ty * Reg.TILE_H;
+                    switch (this.currentLocation.map[ty][tx]) {
+                        case '~': 
+                            chao.drawImage(this.imageLocation, this.imageWater, drawX, drawY);
+                            break;
+                    }
+                }
+            }
+        }
+
     }
 
     this.update = function() {
         // update animated tiles
-        this.waterTileY += chao.getTimeDelta() * 2;
-        if (this.waterTileY >= Reg.TILE_H) {
-            this.waterTileY -= Reg.TILE_H;
+        this.animatedTileY += chao.getTimeDelta() * 2;
+        if (this.animatedTileY >= Reg.TILE_H) {
+            this.animatedTileY -= Reg.TILE_H;
         }
 
         var waterImage = chao.getImage("water");
-        chao.drawImage(this.imageWater, waterImage, 0, this.waterTileY);
-        chao.drawImage(this.imageWater, waterImage, 0, this.waterTileY - Reg.TILE_H);
+        chao.drawImage(this.imageWater, waterImage, 0, this.animatedTileY);
+        chao.drawImage(this.imageWater, waterImage, 0, this.animatedTileY - Reg.TILE_H);
 
         var forceFieldImage = chao.getImage("forceField");
-        chao.drawImage(this.imageForceField, forceFieldImage, 0, this.waterTileY);
-        chao.drawImage(this.imageForceField, forceFieldImage, 0, this.waterTileY - Reg.TILE_H);
+        chao.drawImage(this.imageForceField, forceFieldImage, 0, this.animatedTileY);
+        chao.drawImage(this.imageForceField, forceFieldImage, 0, this.animatedTileY - Reg.TILE_H);
 
     }
 
     this.loadLocation = function(locationName) {
-
-        for (var i = 0; i < this.specialTiles.length; ++i) {
-            this.entity.remove(this.specialTiles[i]);
-        }
-        this.specialTiles = [];
-
         var newLocation = Maps[locationName];
         var width = newLocation.map[0].length;
         var height = newLocation.map.length;
@@ -108,9 +128,9 @@ function ComponentLocation(game, camera) {
 
         // this.imageLocation.setImage(locationCanvas);
 
-        for (var i = 0; i < width; ++i) {
-            for (var j = 0; j < height; ++j) {
-                var symbol = newLocation.map[j][i];
+        for (var x = 0; x < width; ++x) {
+            for (var y = 0; y < height; ++y) {
+                var symbol = newLocation.map[y][x];
                 var symbolIdx = this.tileSymbols.indexOf(symbol);
 
                 if (symbolIdx == -1) {
@@ -118,12 +138,14 @@ function ComponentLocation(game, camera) {
                 }
 
                 var image = this.tiles[symbolIdx];
-                chao.drawImage(this.imageLocation, image, i * Reg.TILE_W, j * Reg.TILE_H);
+                chao.drawImage(this.imageLocation, image, x * Reg.TILE_W, y * Reg.TILE_H);
 
                 // if(symbol === "~"){
-                // 	this.addWater(i, j, this.imageWater);
+                //     animatedTileData.image = this.imageWater;
+                //     this.animatedTiles.push(animatedTileData);
                 // } else if(symbol === "="){
-                // 	this.addWater(i, j, this.imageForceField);
+                // 	animatedTileData.image = this.imageForceField;
+                //     this.animatedTiles.push(animatedTileData);
                 // }
             }
         }
@@ -137,12 +159,6 @@ function ComponentLocation(game, camera) {
         }
 
         this.currentLocation = newLocation;
-    }
-
-    this.addWater = function(x, y, image) {
-        var waterTile = chao.helpers.createSprite(undefined, "Water", image, x * Reg.TILE_W, y * Reg.TILE_H);
-        this.entity.add(waterTile.entity);
-        this.specialTiles.push(waterTile.entity);
     }
 
     this.getTileSymbol = function(x, y) {

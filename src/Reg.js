@@ -32,6 +32,23 @@ var Reg = {
 
     colorYellow: 0xffbbc840, // Earls green
 
+    colorPico8Black: 0xff000000,
+    colorPico8DarkBlue: 0xff1D2B53,
+    colorPico8DarkPurple: 0xff7E2553,
+    colorPico8DarkGreen: 0xff008751,
+    colorPico8Brown: 0xffAB5236,
+    colorPico8DarkGrey: 0xff5F574F,
+    colorPico8LightGrey: 0xffC2C3C7,
+    colorPico8White: 0xffFFF1E8,
+    colorPico8Red: 0xffFF004D,
+    colorPico8Orange: 0xffFFA300,
+    colorPico8Yellow: 0xffFFEC27,
+    colorPico8Green: 0xff00E436,
+    colorPico8Blue: 0xff29ADFF,
+    colorPico8Lavender: 0xff83769C,
+    colorPico8Pink: 0xffFF77A8,
+    colorPico8LightPeach: 0xffFFCCA,
+
 
     TILE_W: 16,
     TILE_H: 16,
