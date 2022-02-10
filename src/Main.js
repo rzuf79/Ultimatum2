@@ -1,4 +1,4 @@
-chao.init(320, 240, chao.SCALING_MODE_KEEP_RATIO, "canvas");
+chao.init(320, 240, chao.SCALING_MODE_EXTEND, "canvas");
 chao.backgroundColor = "#000000";
 chao.setImagesSmoothing(false);
 
