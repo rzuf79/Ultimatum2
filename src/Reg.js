@@ -49,10 +49,6 @@ var Reg = {
     colorPico8Pink: 0xffFF77A8,
     colorPico8LightPeach: 0xffFFCCA,
 
-
-    TILE_W: 16,
-    TILE_H: 16,
-
     MOVEMENT_REPEAT_RATE: 0.15,
 
     loadGame: false

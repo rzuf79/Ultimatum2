@@ -12,14 +12,14 @@ function ComponentCharacter(game, tileName) {
 
     this.create = function() {
         this.sprite = this.entity.addComponent(new ComponentSprite());
-        this.sprite.setImage(chao.createImage(undefined, Reg.TILE_W, Reg.TILE_H));
+        this.sprite.setImage(chao.createImage(undefined, Tilesets.getCurrent().width, Tilesets.getCurrent().height));
         this.sprite.entity.setPivot(0, 0);
 
         var tileRect = {
-            x: Tiles[this.tileName].x * Reg.TILE_W,
-            y: Tiles[this.tileName].y * Reg.TILE_H,
-            width: Reg.TILE_W,
-            height: Reg.TILE_H
+            x: Tiles[this.tileName].x * Tilesets.getCurrent().width,
+            y: Tiles[this.tileName].y * Tilesets.getCurrent().height,
+            width: Tilesets.getCurrent().width,
+            height: Tilesets.getCurrent().height
         }
 
         chao.drawImagePart(this.sprite.image, chao.getImage("tiles"), 0, 0, tileRect);
@@ -38,8 +38,8 @@ function ComponentCharacter(game, tileName) {
     }
 
     this.updatePosition = function() {
-        this.entity.x = this.x * Reg.TILE_W;
-        this.entity.y = this.y * Reg.TILE_H;
+        this.entity.x = this.x * Tilesets.getCurrent().width;
+        this.entity.y = this.y * Tilesets.getCurrent().height;
     }
 
     this.setPosition = function(x, y) {

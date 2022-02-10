@@ -68,10 +68,10 @@ function ComponentPlayer(game, camera, x, y) {
 
     this.onLooped = function(loopBorder) {
         switch (loopBorder) {
-            case "n": camera.entity.y -= game.location.locationSize.y; break;
-            case "s": camera.entity.y += game.location.locationSize.y; break;
-            case "w": camera.entity.x -= game.location.locationSize.x; break;
-            case "e": camera.entity.x += game.location.locationSize.x; break;
+            case "n": camera.entity.y -= game.location.locationPixelSize.y; break;
+            case "s": camera.entity.y += game.location.locationPixelSize.y; break;
+            case "w": camera.entity.x -= game.location.locationPixelSize.x; break;
+            case "e": camera.entity.x += game.location.locationPixelSize.x; break;
         }
     }
 

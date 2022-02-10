@@ -20,20 +20,22 @@ function ComponentLocation(game, camera) {
         this.tileSymbols = Object.values(Maps.symbols);
 
         var tilesAtlas = chao.getImage("tiles");
+        var tileset = Tilesets.getCurrent();
 
         for (var i = 0; i < this.tileNames.length; ++i) {
-            var newTile = chao.createImage(this.tileNames[i], Reg.TILE_W, Reg.TILE_H);
-            var tileSprite = chao.createImage(undefined, Reg.TILE_W, Reg.TILE_H);
+            var tileName = this.tileNames[i];
+            var newTile = chao.createImage(tileName, tileset.width, tileset.height);
+            var tileSprite = chao.createImage(undefined, tileset.width, tileset.height);
 
             var tileRect = {
-                x: Tiles[this.tileNames[i]].x * Reg.TILE_W,
-                y: Tiles[this.tileNames[i]].y * Reg.TILE_H,
-                width: Reg.TILE_W,
-                height: Reg.TILE_H
+                x: Tiles[tileName].x * tileset.width,
+                y: Tiles[tileName].y * tileset.height,
+                width: tileset.width,
+                height: tileset.height
             }
 
             chao.drawImagePart(tileSprite, tilesAtlas, 0, 0, tileRect);
-            chao.tintImage(tileSprite, Tiles[this.tileNames[i]].color);
+            chao.tintImage(tileSprite, Tilesets.getColor(tileName));
 
             chao.clearToColor(newTile, chao.makeColor(0, 0, 0));
             chao.drawImage(newTile, tileSprite, 0, 0);
@@ -41,8 +43,8 @@ function ComponentLocation(game, camera) {
             this.tiles.push(newTile);
         }
 
-        this.imageWater = chao.createImage("water_tile", Reg.TILE_W, Reg.TILE_H);
-        this.imageForceField = chao.createImage("force_field_tile", Reg.TILE_W, Reg.TILE_H);
+        this.imageWater = chao.createImage("water_tile", tileset.width, tileset.height);
+        this.imageForceField = chao.createImage("force_field_tile", tileset.width, tileset.height);
     }
 
     this.destroy = function() {
@@ -78,18 +80,18 @@ function ComponentLocation(game, camera) {
         // draw animated tiles
         {
             var visibleRect = camera.getVisibleRect();
-            visibleRect.x = Math.ceil(visibleRect.x / Reg.TILE_W);
-            visibleRect.y = Math.ceil(visibleRect.y / Reg.TILE_H);
-            visibleRect.width = Math.ceil(visibleRect.width / Reg.TILE_W);
-            visibleRect.height = Math.ceil(visibleRect.height / Reg.TILE_H);
+            visibleRect.x = Math.ceil(visibleRect.x / Tilesets.getCurrent().width);
+            visibleRect.y = Math.ceil(visibleRect.y / Tilesets.getCurrent().height);
+            visibleRect.width = Math.ceil(visibleRect.width / Tilesets.getCurrent().width);
+            visibleRect.height = Math.ceil(visibleRect.height / Tilesets.getCurrent().height);
             for(x = visibleRect.x - 1; x < visibleRect.x + visibleRect.width; ++x) {
                 var tx = x >= 0 ? x : x + this.locationSize.x;
                 tx %= this.locationSize.x;
-                var drawX = tx * Reg.TILE_W;
+                var drawX = tx * Tilesets.getCurrent().width;
                 for(y = visibleRect.y - 1; y < visibleRect.y + visibleRect.height; ++y) {
                     var ty = y >= 0 ? y : y + this.locationSize.y;
                     ty %= this.locationSize.y;
-                    var drawY = ty * Reg.TILE_H;
+                    var drawY = ty * Tilesets.getCurrent().height;
                     switch (this.currentLocation.map[ty][tx]) {
                         case '~': 
                             chao.drawImage(this.imageLocation, this.imageWater, drawX, drawY);
@@ -103,17 +105,17 @@ function ComponentLocation(game, camera) {
     this.update = function() {
         // update animated tiles
         this.animatedTileY += chao.getTimeDelta() * 2;
-        if (this.animatedTileY >= Reg.TILE_H) {
-            this.animatedTileY -= Reg.TILE_H;
+        if (this.animatedTileY >= Tilesets.getCurrent().height) {
+            this.animatedTileY -= Tilesets.getCurrent().height;
         }
 
         var waterImage = chao.getImage("water");
         chao.drawImage(this.imageWater, waterImage, 0, this.animatedTileY);
-        chao.drawImage(this.imageWater, waterImage, 0, this.animatedTileY - Reg.TILE_H);
+        chao.drawImage(this.imageWater, waterImage, 0, this.animatedTileY - Tilesets.getCurrent().height);
 
         var forceFieldImage = chao.getImage("forceField");
         chao.drawImage(this.imageForceField, forceFieldImage, 0, this.animatedTileY);
-        chao.drawImage(this.imageForceField, forceFieldImage, 0, this.animatedTileY - Reg.TILE_H);
+        chao.drawImage(this.imageForceField, forceFieldImage, 0, this.animatedTileY - Tilesets.getCurrent().height);
 
     }
 
@@ -122,8 +124,8 @@ function ComponentLocation(game, camera) {
 
         this.locationSize.x = newLocation.map[0].length;
         this.locationSize.y = newLocation.map.length;
-        this.locationPixelSize.x = this.locationSize.x * Reg.TILE_W;
-        this.locationPixelSize.y = this.locationSize.y * Reg.TILE_H;
+        this.locationPixelSize.x = this.locationSize.x * Tilesets.getCurrent().width;
+        this.locationPixelSize.y = this.locationSize.y * Tilesets.getCurrent().height;
 
         this.imageLocation = chao.createImage(undefined, this.locationPixelSize.x, this.locationPixelSize.y);
 
@@ -137,7 +139,7 @@ function ComponentLocation(game, camera) {
                 }
 
                 var image = this.tiles[symbolIdx];
-                chao.drawImage(this.imageLocation, image, x * Reg.TILE_W, y * Reg.TILE_H);
+                chao.drawImage(this.imageLocation, image, x * Tilesets.getCurrent().width, y * Tilesets.getCurrent().height);
             }
         }
 
