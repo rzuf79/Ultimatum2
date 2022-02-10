@@ -3,7 +3,7 @@ chao.backgroundColor = "#000000";
 chao.setImagesSmoothing(false);
 
 // ----- Them assets
-chao.loadImage("tiles", "assets/images/tiles.png");
+chao.loadImage("tiles", Tilesets.getCurrent().path);
 
 // -----
 

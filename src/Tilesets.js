@@ -11,6 +11,8 @@ var Tilesets = {
 	},
 
 	classic: {
+		path: "assets/images/tiles.png",
+		
 		width: 16,
 		height: 16,
 
