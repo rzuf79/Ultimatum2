@@ -10,6 +10,7 @@ var Tilesets = {
 		return tileset.palette[colorId];
 	},
 
+
 	classic: {
 		path: "assets/images/tiles.png",
 		

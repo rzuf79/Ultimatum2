@@ -1,11 +1,12 @@
 Piotr's TODOs
 
 v animated tiles (for water and force fields)
-- convert all the locations to ascii
+v convert all the locations to ascii
+v conceive some clever way of looping the overworld maps
+v optimize the animated tiles to work with looped maps
+- add font (probably cp437)
+- microlite20 ruleset
 - traveling between locations
-- conceive some clever way of looping the overworld maps
-- optimize the animated tiles to work with looped maps
-- uh, actually all dynamic objects should work with the looped overworld maps
 - in-game messages (we have to display the magnificent "HEX-E-POO" line somewhere, right?)
 - inventory
 - character stats
