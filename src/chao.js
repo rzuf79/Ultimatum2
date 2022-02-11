@@ -1082,6 +1082,7 @@ var chao = {
 	},
 
 	drawText(image, font, text, x, y, size, color, align, outlineColor, outlineSize) {
+		font = chao.getFont(font);
 		color = color || 0xff000000;
 		align = align || "left";
 		outlineColor = outlineColor || 0xff000000;

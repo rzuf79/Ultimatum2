@@ -135,7 +135,7 @@ function ComponentLocation(game, camera) {
                 var symbolIdx = this.tileSymbols.indexOf(symbol);
 
                 if (symbolIdx == -1) {
-                    chao.log("Unrecognized map symbol: \"" + symbol + "\"");
+                    chao.log("Unrecognized map symbol: \"" + symbol + "\" at " + x + "x" + y );
                 }
 
                 var image = this.tiles[symbolIdx];

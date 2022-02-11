@@ -1,5 +1,5 @@
-function ComponentTemplate(){
-	this.name = "Template";
+function ComponentHUD(){
+	this.name = "HUD";
 	this.entity = null;
 
 	this.create = function(){
