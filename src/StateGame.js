@@ -11,7 +11,6 @@ function StateGame() {
     this.hud = null;
 
     this.create = function() {
-
         this.groupWorld = new Entity("Group World");
         this.groupGUI = new Entity("Group GUI");
 

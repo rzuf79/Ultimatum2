@@ -12,7 +12,7 @@
 var chao = {
 
 	/** Consts. */
-	VERSION: "0.71",
+	VERSION: "0.72",
 
 	SCALING_MODE_NONE: 0, // Game canvas will not be scaled at all.
 	SCALING_MODE_STRETCH: 1, // Scales the canvas to fill the whole viewport.
@@ -231,6 +231,7 @@ var chao = {
 		chao.setFPS(60);
 		chao.lastTime = Date.now();
 		chao.timeDelta = 0.0;
+		chao.maxTimeDelta = 0.1;
 		chao.timeScale = 1.0;
 
 		chao.countFPS = false;
@@ -383,6 +384,10 @@ var chao = {
 
 		chao.timeDelta = (Date.now() - chao.lastTime) * 0.001;
 		chao.lastTime = Date.now();
+
+		if (chao.timeDelta > chao.maxTimeDelta) {
+			chao.timeDelta = chao.maxTimeDelta;
+		}
 
 		if (chao.countFPS) {
 			chao.FPSCounter++;
