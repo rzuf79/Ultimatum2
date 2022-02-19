@@ -42,7 +42,7 @@ function StateGame() {
 
         chao.helpers.createFpsCounter(this.groupGUI, 16);
 
-        Utils.addText(this.groupGUI, "albowiem", 100, 100);
+        Utils.addText(this.groupGUI, "IO CHAOS (i tak dalej)", 100, 100, 1);
 
     }
 
