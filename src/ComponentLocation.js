@@ -146,7 +146,7 @@ function ComponentLocation(game, camera) {
         if (newLocation.looped) {
             camera.resetBounds();
         } else {
-            camera.setBounds(0, 0, this.imageLocation.width, this.imageLocation.height);
+            camera.setBounds(0, 0, this.imageLocation.width - camera.offsetX*2, this.imageLocation.height);
         }
 
         this.currentLocation = newLocation;

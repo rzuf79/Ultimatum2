@@ -2631,11 +2631,11 @@ function Entity(name, x, y) {
 		if (this.anchor.stretch) {
 			this.stretchOnParent(true);
 		}
-		if (this.anchor.alignX !== undefined && this.anchor.anchorX !== undefined && this.anchor.pxOffsetX !== undefined) {
-			this.alignToParentHorizontally(this.anchor.alignX, this.anchor.anchorX, this.anchor.pxOffsetX);
+		if (this.anchor.parentX !== undefined && this.anchor.childX !== undefined && this.anchor.pxOffsetX !== undefined) {
+			this.alignToParentHorizontally(this.anchor.parentX, this.anchor.childX, this.anchor.pxOffsetX);
 		}
-		if (this.anchor.alignY !== undefined && this.anchor.anchorY !== undefined && this.anchor.pxOffsetY !== undefined) {
-			this.alignToParentVertically(this.anchor.alignY, this.anchor.anchorY, this.anchor.pxOffsetY);
+		if (this.anchor.parentY !== undefined && this.anchor.childY !== undefined && this.anchor.pxOffsetY !== undefined) {
+			this.alignToParentVertically(this.anchor.parentY, this.anchor.childY, this.anchor.pxOffsetY);
 		}
 
 		var i;
@@ -3846,8 +3846,8 @@ function ComponentCamera() {
 		};
 
 		var cameraPos = {
-			x: this.entity.x + targetPosOffset.x,
-			y: this.entity.y + targetPosOffset.y
+			x: this.entity.x + targetPosOffset.x + this.offsetX,
+			y: this.entity.y + targetPosOffset.y + this.offsetY
 		};
 
 		this.clampToBounds(cameraPos);

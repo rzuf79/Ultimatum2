@@ -23,7 +23,11 @@ function StateGame() {
         this.groupWorld.add(this.camera.entity);
 
         this.location = (new Entity("Location")).addComponent(new ComponentLocation(this, this.camera));
+
+        this.hud = this.groupGUI.addWithComponent(new Entity("HUD"), new ComponentHUD());
+
         this.camera.entity.add(this.location.entity);
+        this.camera.offsetX = -(this.hud.getVisibileFrameWidth()) / 2;
 
         if (true) {
             this.location.loadLocation("piratesHarbor");
@@ -33,16 +37,15 @@ function StateGame() {
             this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 16, 17));
         }
 
-        this.camera.entity.add(this.ludzik.entity);
 
+        this.camera.entity.add(this.ludzik.entity);
         this.camera.follow(this.ludzik.entity, 4.0);
         this.camera.snapToFollowed();
 
-        this.hud = this.groupGUI.addWithComponent(new Entity("HUD"), new ComponentHUD());
 
         chao.helpers.createFpsCounter(this.groupGUI, 16);
 
-        Utils.addText(this.groupGUI, "IO CHAOS (i tak dalej)", 100, 100, 1);
+        // Utils.addText(this.groupGUI, "IO CHAOS (i tak dalej)", 100, 100, 1);
 
     }
 
