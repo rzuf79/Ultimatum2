@@ -29,12 +29,19 @@ function StateGame() {
         this.camera.entity.add(this.location.entity);
         this.camera.offsetX = -(this.hud.getVisibileFrameWidth()) / 2;
 
-        if (true) {
+        var loc = 3;
+        if (loc == 0) {
             this.location.loadLocation("piratesHarbor");
             this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 32, 62));
-        } else {
+        } else if (loc == 1) {
             this.location.loadLocation("bc1423");
             this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 16, 17));
+        } else if (loc == 2) {
+            this.location.loadLocation("mars");
+            this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 30, 30));
+        } else if (loc == 3) {
+            this.location.loadLocation("planetX");
+            this.ludzik = (new Entity("Ludzik")).addComponent(new ComponentPlayer(this, this.camera, 14, 20));
         }
 
 

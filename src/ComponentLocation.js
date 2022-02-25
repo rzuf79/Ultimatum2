@@ -68,6 +68,11 @@ function ComponentLocation(game, camera) {
                 chao.makeRect(0, size.y, size.x, size.y),
                 chao.makeRect(-size.x, 0, size.x, size.y),
                 chao.makeRect(size.x, 0, size.x, size.y),
+                
+                chao.makeRect(-size.x, -size.y, size.x, size.y),
+                chao.makeRect(size.x, -size.y, size.x, size.y),
+                chao.makeRect(size.x, size.y, size.x, size.y),
+                chao.makeRect(-size.x, -size.y, size.x, size.y),
             ];
             
             for (var i = 0; i < rects.length; ++i) {
@@ -146,7 +151,8 @@ function ComponentLocation(game, camera) {
         if (newLocation.looped) {
             camera.resetBounds();
         } else {
-            camera.setBounds(0, 0, this.imageLocation.width - camera.offsetX*2, this.imageLocation.height);
+            var boundsWidth = this.imageLocation.width - camera.offsetX*2;
+            camera.setBounds(0, 0, boundsWidth-2, this.imageLocation.height);
         }
 
         this.currentLocation = newLocation;
