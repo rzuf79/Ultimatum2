@@ -48,7 +48,25 @@ typedef struct {
     int knowledge;
     int communication;
     int reward_gold;
+    int reward_exp;
 } U2MonsterTemplate;
+
+typedef enum {
+    U2_SPELL_DAMAGE_BOLT = 0,
+    U2_SPELL_HEAL_SELF,
+    U2_SPELL_BLINK_FORWARD,
+} U2SpellEffect;
+
+typedef struct {
+    const char* id;
+    CharacterClass class_id;
+    const char* name;
+    const char* description;
+    int mp_cost;
+    int range;
+    U2SpellEffect effect;
+    const char* power_dice;
+} U2SpellDef;
 
 typedef struct {
     const char* source_map_id;
@@ -210,12 +228,20 @@ static const U2ClassTemplate u2_class_templates[] = {
 static const size_t u2_class_templates_count = sizeof(u2_class_templates) / sizeof(u2_class_templates[0]);
 
 static const U2MonsterTemplate u2_monster_templates[] = {
-    { "orc", CLASS_NONE, 9, 0, "1d6", 10, 12, 10, 6, 2, 0, 0, 0, 12 },
-    { "gremlin", CLASS_NONE, 7, 0, "1d4", 10, 9, 14, 7, 1, 3, 0, 0, 8 },
-    { "viper", CLASS_NONE, 6, 0, "1d4+1", 10, 10, 13, 4, 1, 1, 0, 0, 6 },
+    { "orc", CLASS_NONE, 9, 0, "1d6", 10, 12, 10, 6, 2, 0, 0, 0, 12, 18 },
+    { "gremlin", CLASS_NONE, 7, 0, "1d4", 10, 9, 14, 7, 1, 3, 0, 0, 8, 12 },
+    { "viper", CLASS_NONE, 6, 0, "1d4+1", 10, 10, 13, 4, 1, 1, 0, 0, 6, 10 },
 };
 
 static const size_t u2_monster_templates_count = sizeof(u2_monster_templates) / sizeof(u2_monster_templates[0]);
+
+static const U2SpellDef u2_spell_defs[] = {
+    { "arc_bolt", CLASS_MAGI, "Arc Bolt", "Choose a direction and loose a crackling bolt down that line.", 3, 4, U2_SPELL_DAMAGE_BOLT, "1d8" },
+    { "phase_step", CLASS_MAGI, "Phase Step", "Slip forward through the air to the furthest clear tile ahead.", 2, 3, U2_SPELL_BLINK_FORWARD, NULL },
+    { "mend", CLASS_CLERIC, "Mend", "Call restorative grace to heal your own wounds.", 3, 0, U2_SPELL_HEAL_SELF, "1d8" },
+};
+
+static const size_t u2_spell_defs_count = sizeof(u2_spell_defs) / sizeof(u2_spell_defs[0]);
 
 static const U2TransitionDef u2_transition_defs[] = {
     { "bc1423", 36, 29, "towneBasko", 31, 63 },
@@ -277,6 +303,8 @@ static const size_t u2_service_defs_count = sizeof(u2_service_defs) / sizeof(u2_
 
 static const U2ShopStockDef u2_shop_stock_defs[] = {
     { "basko_merchant", "Food Pack (+40 food)", "trail_ration", 12, 40 },
+    { "basko_merchant", NULL, "lesser_healing_potion", 16, 0 },
+    { "basko_merchant", NULL, "focus_tonic", 16, 0 },
     { "basko_merchant", NULL, "dagger", 18, 0 },
     { "basko_merchant", NULL, "short_sword", 26, 0 },
     { "basko_merchant", NULL, "oak_staff", 18, 0 },
@@ -303,6 +331,48 @@ static const U2MonsterTemplate* u2_find_monster_template(const char* id) {
     for (size_t i = 0; i < u2_monster_templates_count; ++i) {
         if (strcmp(u2_monster_templates[i].id, id) == 0) {
             return &u2_monster_templates[i];
+        }
+    }
+
+    return NULL;
+}
+
+static int u2_get_spell_count_for_class(CharacterClass class_id) {
+    int count = 0;
+
+    for (size_t i = 0; i < u2_spell_defs_count; ++i) {
+        if (u2_spell_defs[i].class_id == class_id) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+static const U2SpellDef* u2_get_spell_for_class_by_index(CharacterClass class_id, int index) {
+    int current = 0;
+
+    for (size_t i = 0; i < u2_spell_defs_count; ++i) {
+        if (u2_spell_defs[i].class_id != class_id) {
+            continue;
+        }
+        if (current == index) {
+            return &u2_spell_defs[i];
+        }
+        current++;
+    }
+
+    return NULL;
+}
+
+static const U2SpellDef* u2_find_spell_def(const char* id) {
+    if (id == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < u2_spell_defs_count; ++i) {
+        if (strcmp(u2_spell_defs[i].id, id) == 0) {
+            return &u2_spell_defs[i];
         }
     }
 

@@ -14,6 +14,7 @@ typedef enum {
 	ITEM_TYPE_ARMOR,
 	ITEM_TYPE_HAT,
 	ITEM_TYPE_FOOD,
+	ITEM_TYPE_CONSUMABLE,
 	ITEM_TYPE_NONE,
 } ItemType;
 
@@ -112,17 +113,33 @@ void items_init() {
 		.damage = NULL,
 		.armor_class = 1,
 	};
-	items[i++] = (Item) {
-		.id = "trail_ration",
-		.name = "Trail Ration",
-		.type = ITEM_TYPE_FOOD,
-		.stackable = true,
-		.damage = NULL,
-		.armor_class = 0,
-	};
-	items[i++] = (Item) {
-		.id = "spellbook",
-		.name = "Spellbook",
+		items[i++] = (Item) {
+			.id = "trail_ration",
+			.name = "Trail Ration",
+			.type = ITEM_TYPE_FOOD,
+			.stackable = true,
+			.damage = NULL,
+			.armor_class = 0,
+		};
+		items[i++] = (Item) {
+			.id = "lesser_healing_potion",
+			.name = "Lesser Healing Potion",
+			.type = ITEM_TYPE_CONSUMABLE,
+			.stackable = true,
+			.damage = NULL,
+			.armor_class = 0,
+		};
+		items[i++] = (Item) {
+			.id = "focus_tonic",
+			.name = "Focus Tonic",
+			.type = ITEM_TYPE_CONSUMABLE,
+			.stackable = true,
+			.damage = NULL,
+			.armor_class = 0,
+		};
+		items[i++] = (Item) {
+			.id = "spellbook",
+			.name = "Spellbook",
 		.type = ITEM_TYPE_KEY,
 		.stackable = false,
 		.damage = NULL,

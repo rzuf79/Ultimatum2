@@ -237,6 +237,66 @@ static const char* u2_class_name(CharacterClass class_id) {
     return class_template != NULL ? class_template->name : "None";
 }
 
+static const char* u2_slot_name(Slot slot) {
+    switch (slot) {
+        case SLOT_HAND_RIGHT: return "Weapon";
+        case SLOT_HAND_LEFT: return "Offhand";
+        case SLOT_BODY: return "Body";
+        case SLOT_HEAD: return "Head";
+        case SLOT_ACCESSORY: return "Accessory";
+        case SLOT_END:
+        default:
+            return "Slot";
+    }
+}
+
+static bool u2_get_item_equip_slot(const Item* item, Slot* out_slot) {
+    if (item == NULL || out_slot == NULL) {
+        return false;
+    }
+
+    switch (item->type) {
+        case ITEM_TYPE_WEAPON:
+            *out_slot = SLOT_HAND_RIGHT;
+            return true;
+        case ITEM_TYPE_SHIELD:
+            *out_slot = SLOT_HAND_LEFT;
+            return true;
+        case ITEM_TYPE_ARMOR:
+            *out_slot = SLOT_BODY;
+            return true;
+        case ITEM_TYPE_HAT:
+            *out_slot = SLOT_HEAD;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool u2_item_is_consumable(const Item* item) {
+    if (item == NULL) {
+        return false;
+    }
+
+    return item->type == ITEM_TYPE_FOOD || item->type == ITEM_TYPE_CONSUMABLE;
+}
+
+static int u2_get_player_spell_count(void) {
+    return u2_get_spell_count_for_class(game_state.session.chosen_class);
+}
+
+static const U2SpellDef* u2_get_player_spell_by_index(int index) {
+    return u2_get_spell_for_class_by_index(game_state.session.chosen_class, index);
+}
+
+static const U2SpellDef* u2_get_targeting_spell(void) {
+    return u2_find_spell_def(game_state.session.spell_targeting.spell_id);
+}
+
+static const U2SpellDef* u2_get_active_projectile_spell(void) {
+    return u2_find_spell_def(game_state.session.spell_projectile.spell_id);
+}
+
 static const U2TileDef* u2_get_tile_at(const U2MapDef* map, int tile_x, int tile_y) {
     if (map == NULL || tile_x < 0 || tile_y < 0 || tile_x >= map->width || tile_y >= map->height) {
         return NULL;
@@ -381,6 +441,19 @@ static const U2ServiceDef* u2_get_active_service_def(void) {
     return u2_find_service_def(game_state.session.active_service_entity_id);
 }
 
+static void u2_clamp_player_resources(void) {
+    game_state.session.player.sheet.hp = clamp(
+        game_state.session.player.sheet.hp,
+        0,
+        d20_get_max_hp(&game_state.session.player.sheet)
+    );
+    game_state.session.player.sheet.mp = clamp(
+        game_state.session.player.sheet.mp,
+        0,
+        d20_get_max_mp(&game_state.session.player.sheet)
+    );
+}
+
 static void u2_close_service_panel(void) {
     game_state.session.panel = U2_PANEL_NONE;
     game_state.session.active_service_entity_id = NULL;
@@ -396,6 +469,35 @@ static void u2_open_service_panel(const U2Entity* entity) {
     game_state.session.panel = U2_PANEL_SERVICE;
     game_state.session.active_service_entity_id = service->entity_id;
     game_state.session.service_selection_index = 0;
+}
+
+static void u2_open_inventory_panel(void) {
+    game_state.session.panel = U2_PANEL_INVENTORY;
+    game_state.session.inventory_selection_index = clamp(
+        game_state.session.inventory_selection_index,
+        0,
+        max(0, game_state.session.inventory.count - 1)
+    );
+}
+
+static void u2_open_spell_panel(void) {
+    game_state.session.panel = U2_PANEL_SPELLS;
+    game_state.session.spell_selection_index = clamp(
+        game_state.session.spell_selection_index,
+        0,
+        max(0, u2_get_player_spell_count() - 1)
+    );
+}
+
+static void u2_begin_spell_targeting(const U2SpellDef* spell) {
+    if (spell == NULL) {
+        return;
+    }
+
+    game_state.session.panel = U2_PANEL_NONE;
+    game_state.session.spell_targeting.active = true;
+    game_state.session.spell_targeting.spell_id = spell->id;
+    u2_session_show_message(&game_state.session, false, 0.0f, "Choose a direction for %s.", spell->name);
 }
 
 static void u2_scene_clear_entities(void) {
@@ -842,23 +944,34 @@ static int u2_get_hostile_reward_gold(const U2Entity* entity) {
     return monster_template != NULL ? monster_template->reward_gold : 0;
 }
 
-static void u2_end_combat_to_playing(void) {
-    game_state.session.flow_state = U2_FLOW_PLAYING;
-    game_state.session.held_move_direction = U2_MOVE_NONE;
-    game_state.session.move_repeat_timer = U2_STEP_DELAY;
-    u2_session_clear_combat(&game_state.session);
+static int u2_get_hostile_reward_exp(const U2Entity* entity) {
+    const U2MonsterTemplate* monster_template = u2_find_monster_template_for_entity(entity);
+    return monster_template != NULL ? monster_template->reward_exp : 0;
 }
 
-static void u2_return_from_combat_with_message(const char* fmt, ...) {
-    char text[U2_MESSAGE_TEXT_MAX];
-    va_list args;
+static void u2_append_player_exp_reward_text(char* dst, size_t dst_size, int exp_reward) {
+    Character* player = &game_state.session.player.sheet;
+    const int starting_level = player->level;
+    const int starting_stat_points = player->stat_points;
 
-    va_start(args, fmt);
-    vsnprintf(text, sizeof(text), fmt, args);
-    va_end(args);
+    if (dst == NULL || dst_size == 0 || exp_reward <= 0) {
+        return;
+    }
 
-    u2_end_combat_to_playing();
-    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", text);
+    player->exp += exp_reward;
+    u2_append_textf(dst, dst_size, " You gain %d xp.", exp_reward);
+
+    while (player->exp >= d20_get_exp_for_level(player->level + 1)) {
+        d20_advance_level(player);
+    }
+
+    if (player->level > starting_level) {
+        u2_restore_player_fully();
+        u2_append_textf(dst, dst_size, " Level up! You are now level %d.", player->level);
+        if (player->stat_points > starting_stat_points) {
+            u2_append_textf(dst, dst_size, " %d stat points await a future training system.", player->stat_points);
+        }
+    }
 }
 
 static void u2_build_attack_resolution_text(
@@ -925,111 +1038,111 @@ static void u2_build_attack_resolution_text(
     }
 }
 
-static void u2_handle_combat_defeat(void) {
+static void u2_handle_player_defeat(const char* attack_text) {
+    char text[U2_MESSAGE_TEXT_MAX];
+
+    if (attack_text != NULL && attack_text[0] != '\0') {
+        snprintf(
+            text,
+            sizeof(text),
+            "%s You collapse. You are carried to Castle British and restored to full strength.",
+            attack_text
+        );
+    } else {
+        snprintf(text, sizeof(text), "You collapse. You are carried to Castle British and restored to full strength.");
+    }
+
     u2_restore_player_fully();
-    u2_load_scene("castleBritish", 13, 13);
-    u2_return_from_combat_with_message("You are carried to Castle British and restored to full strength.");
+    u2_load_scene("castleBritish", 31, 14);
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", text);
 }
 
-static void u2_handle_combat_victory(void) {
-    U2Entity* source_entity = u2_get_combat_source_entity();
-    const int reward_gold = u2_get_hostile_reward_gold(&game_state.session.combat.enemy);
+static void u2_handle_hostile_defeat(U2Entity* entity, const char* attack_text) {
+    char enemy_name[64];
+    char text[U2_MESSAGE_TEXT_MAX];
+    const int reward_gold = u2_get_hostile_reward_gold(entity);
+    const int reward_exp = u2_get_hostile_reward_exp(entity);
 
-    if (source_entity != NULL) {
-        u2_mark_persistent_entity_inactive(source_entity->id);
-        u2_entity_reset(source_entity);
-    } else if (game_state.session.combat.source_entity_id[0] != '\0') {
-        u2_mark_persistent_entity_inactive(game_state.session.combat.source_entity_id);
+    if (entity == NULL) {
+        return;
+    }
+
+    u2_copy_string(enemy_name, sizeof(enemy_name), entity->name);
+
+    if (entity->id != NULL) {
+        u2_mark_persistent_entity_inactive(entity->id);
     }
 
     game_state.session.gold += reward_gold;
-    u2_return_from_combat_with_message(
-        "%s falls. You gather %d gold from the fight.",
-        game_state.session.combat.enemy.name,
-        reward_gold
-    );
+
+    if (attack_text != NULL && attack_text[0] != '\0') {
+        snprintf(
+            text,
+            sizeof(text),
+            "%s %s falls. You gather %d gold from the fight.",
+            attack_text,
+            enemy_name,
+            reward_gold
+        );
+    } else {
+        snprintf(text, sizeof(text), "%s falls. You gather %d gold from the fight.", enemy_name, reward_gold);
+    }
+
+    u2_append_player_exp_reward_text(text, sizeof(text), reward_exp);
+
+    u2_entity_reset(entity);
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", text);
 }
 
-static void u2_resolve_enemy_combat_turn(void) {
+static void u2_resolve_hostile_bump_attack(U2Entity* entity) {
     char log_text[U2_MESSAGE_TEXT_MAX];
 
+    if (!u2_is_hostile_entity(entity)) {
+        return;
+    }
+
     u2_build_attack_resolution_text(
-        &game_state.session.combat.enemy.sheet,
-        game_state.session.combat.enemy.name,
+        &entity->sheet,
+        entity->name,
         &game_state.session.player.sheet,
         game_state.session.player_name,
         log_text,
         sizeof(log_text)
     );
+
+    u2_sync_persistent_entity_state_from_entity(entity);
 
     if (game_state.session.player.sheet.hp <= 0) {
-        u2_set_combat_log("%s You collapse.", log_text);
-        u2_handle_combat_defeat();
+        u2_handle_player_defeat(log_text);
         return;
     }
 
-    u2_set_combat_log("%s", log_text);
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", log_text);
 }
 
-static void u2_resolve_player_combat_attack(void) {
+static void u2_resolve_player_bump_attack(U2Entity* entity) {
     char log_text[U2_MESSAGE_TEXT_MAX];
+
+    if (!u2_is_hostile_entity(entity)) {
+        return;
+    }
 
     u2_build_attack_resolution_text(
         &game_state.session.player.sheet,
         game_state.session.player_name,
-        &game_state.session.combat.enemy.sheet,
-        game_state.session.combat.enemy.name,
+        &entity->sheet,
+        entity->name,
         log_text,
         sizeof(log_text)
     );
 
-    if (game_state.session.combat.enemy.sheet.hp <= 0) {
-        u2_set_combat_log("%s %s is defeated.", log_text, game_state.session.combat.enemy.name);
-        u2_handle_combat_victory();
+    if (entity->sheet.hp <= 0) {
+        u2_handle_hostile_defeat(entity, log_text);
         return;
     }
 
-    u2_set_combat_log("%s", log_text);
-    u2_resolve_enemy_combat_turn();
-}
-
-static void u2_try_flee_from_combat(void) {
-    const int chance = clamp(
-        45 + (game_state.session.player.sheet.stats[STAT_DEX] - game_state.session.combat.enemy.sheet.stats[STAT_DEX]) * 5,
-        20,
-        85
-    );
-
-    if (coin_flip(chance)) {
-        u2_return_from_combat_with_message("You escape from %s.", game_state.session.combat.enemy.name);
-        return;
-    }
-
-    u2_set_combat_log("You fail to escape from %s.", game_state.session.combat.enemy.name);
-    u2_resolve_enemy_combat_turn();
-}
-
-static void u2_begin_hostile_encounter(const U2Entity* entity) {
-    if (!u2_is_hostile_entity(entity) || game_state.session.flow_state == U2_FLOW_COMBAT) {
-        return;
-    }
-
-    u2_close_service_panel();
-    game_state.session.panel = U2_PANEL_NONE;
-    game_state.session.held_move_direction = U2_MOVE_NONE;
-    game_state.session.move_repeat_timer = U2_STEP_DELAY;
-    u2_session_clear_message(&game_state.session);
-    u2_session_clear_combat(&game_state.session);
-    game_state.session.flow_state = U2_FLOW_COMBAT;
-    game_state.session.combat.active = true;
-    game_state.session.combat.enemy = *entity;
-    game_state.session.combat.selection_index = 0;
-    u2_copy_string(
-        game_state.session.combat.source_entity_id,
-        sizeof(game_state.session.combat.source_entity_id),
-        entity->id
-    );
-    u2_set_combat_log("%s closes in. Fight or flee.", entity->name);
+    u2_sync_persistent_entity_state_from_entity(entity);
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", log_text);
 }
 
 static int u2_get_axis_delta_toward_target(int from, int to, int size, bool looped) {
@@ -1114,8 +1227,7 @@ static bool u2_try_move_hostile_entity(U2Entity* entity, int dx, int dy) {
         if (dx > 0) entity->facing = U2_FACING_EAST;
         if (dy < 0) entity->facing = U2_FACING_NORTH;
         if (dy > 0) entity->facing = U2_FACING_SOUTH;
-        u2_sync_persistent_entity_state_from_entity(entity);
-        u2_begin_hostile_encounter(entity);
+        u2_resolve_hostile_bump_attack(entity);
         return true;
     }
 
@@ -1192,11 +1304,10 @@ static void u2_update_hostile_entity(U2Entity* entity) {
 }
 
 static void u2_take_hostile_turn(void) {
-    if (!u2_scene_is_looped()) {
-        return;
-    }
+    const U2MapDef* starting_map = game_state.session.current_map;
+
     for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
-        if (game_state.session.flow_state == U2_FLOW_COMBAT) {
+        if (starting_map == NULL || game_state.session.current_map != starting_map) {
             return;
         }
         u2_update_hostile_entity(&game_state.session.scene_entities[i]);
@@ -1396,7 +1507,7 @@ static void u2_interact_with_entity(const U2Entity* entity) {
     const U2DialogueDef* dialogue = u2_find_dialogue(entity->dialogue_id);
 
     if (u2_is_hostile_entity(entity)) {
-        u2_begin_hostile_encounter(entity);
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Move into %s to attack.", entity->name);
         return;
     }
 
@@ -1501,6 +1612,39 @@ static bool u2_get_entity_screen_position(const U2Entity* entity, int* out_x, in
     return true;
 }
 
+static bool u2_get_tile_center_screen_position(float tile_x, float tile_y, int* out_x, int* out_y) {
+    float screen_x = tile_x * U2_TILE_SIZE + (U2_TILE_SIZE * 0.5f) - game_state.camera_x;
+    float screen_y = tile_y * U2_TILE_SIZE + (U2_TILE_SIZE * 0.5f) - game_state.camera_y;
+
+    if (game_state.session.current_map == NULL) {
+        return false;
+    }
+
+    if (u2_scene_is_looped()) {
+        while (screen_x < -U2_TILE_SIZE) {
+            screen_x += u2_current_map_pixel_width();
+        }
+        while (screen_x >= u2_world_view_width() + U2_TILE_SIZE) {
+            screen_x -= u2_current_map_pixel_width();
+        }
+        while (screen_y < -U2_TILE_SIZE) {
+            screen_y += u2_current_map_pixel_height();
+        }
+        while (screen_y >= u2_world_view_height() + U2_TILE_SIZE) {
+            screen_y -= u2_current_map_pixel_height();
+        }
+    }
+
+    if (screen_x < -U2_TILE_SIZE || screen_x >= u2_world_view_width() + U2_TILE_SIZE ||
+        screen_y < -U2_TILE_SIZE || screen_y >= u2_world_view_height() + U2_TILE_SIZE) {
+        return false;
+    }
+
+    *out_x = (int)roundf(screen_x);
+    *out_y = (int)roundf(screen_y);
+    return true;
+}
+
 static void u2_draw_world(void) {
     if (game_state.session.current_map == NULL) {
         return;
@@ -1560,6 +1704,25 @@ static void u2_draw_scene_entities(void) {
     }
 }
 
+static void u2_draw_spell_projectile(void) {
+    const U2SpellProjectileState* projectile = &game_state.session.spell_projectile;
+    const float traveled_steps = projectile->travel_steps * projectile->progress;
+    const float tile_x = projectile->start_tile_x + projectile->dir_x * traveled_steps;
+    const float tile_y = projectile->start_tile_y + projectile->dir_y * traveled_steps;
+    int screen_x = 0;
+    int screen_y = 0;
+
+    if (!projectile->active) {
+        return;
+    }
+
+    if (!u2_get_tile_center_screen_position(tile_x, tile_y, &screen_x, &screen_y)) {
+        return;
+    }
+
+    fill_circle(chao_canvas, screen_x, screen_y, 4, COLOR_WHITE);
+}
+
 static void u2_draw_hud(void) {
     const int x = u2_world_view_width() + 4;
     const int y = 4;
@@ -1571,20 +1734,22 @@ static void u2_draw_hud(void) {
     ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "STATUS");
     ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "%s", game_state.session.player_name);
     ascii_font_draw(chao_canvas, font, x + 10, y + 36, COLOR_LIGHTGRAY, "%s", class_template != NULL ? class_template->name : "None");
-    ascii_font_draw(chao_canvas, font, x + 10, y + 52, COLOR_WHITE, "HP %d/%d", game_state.session.player.sheet.hp, d20_get_max_hp(&game_state.session.player.sheet));
-    ascii_font_draw(chao_canvas, font, x + 10, y + 64, COLOR_WHITE, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
-    ascii_font_draw(chao_canvas, font, x + 10, y + 80, COLOR_WHITE, "G %d", game_state.session.gold);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 92, u2_get_food_color(), "F %d", game_state.session.food);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 108, COLOR_LIGHTGRAY, "STR %d", game_state.session.player.sheet.stats[STAT_STR]);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 120, COLOR_LIGHTGRAY, "DEX %d", game_state.session.player.sheet.stats[STAT_DEX]);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 132, COLOR_LIGHTGRAY, "MND %d", game_state.session.player.sheet.stats[STAT_MIND]);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 148, COLOR_WHITE, "Area:");
+    ascii_font_draw(chao_canvas, font, x + 10, y + 48, COLOR_WHITE, "LV %d", game_state.session.player.sheet.level);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 60, COLOR_WHITE, "HP %d/%d", game_state.session.player.sheet.hp, d20_get_max_hp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 72, COLOR_WHITE, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 88, COLOR_WHITE, "G %d", game_state.session.gold);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 100, u2_get_food_color(), "F %d", game_state.session.food);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 116, COLOR_LIGHTGRAY, "STR %d", game_state.session.player.sheet.stats[STAT_STR]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 128, COLOR_LIGHTGRAY, "DEX %d", game_state.session.player.sheet.stats[STAT_DEX]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 140, COLOR_LIGHTGRAY, "MND %d", game_state.session.player.sheet.stats[STAT_MIND]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 156, COLOR_WHITE, "Area:");
     if (game_state.session.current_map != NULL) {
-        u2_draw_wrapped_text(x + 10, y + 160, w - 20, COLOR_LIGHTGRAY, game_state.session.current_map->name);
+        u2_draw_wrapped_text(x + 10, y + 168, w - 20, COLOR_LIGHTGRAY, game_state.session.current_map->name);
     }
-    ascii_font_draw(chao_canvas, font, x + 10, y + h - 40, COLOR_YELLOW, "F5 Save");
-    ascii_font_draw(chao_canvas, font, x + 10, y + h - 28, COLOR_YELLOW, "F9 Load");
-    ascii_font_draw(chao_canvas, font, x + 10, y + h - 16, COLOR_YELLOW, "C/I Info");
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 52, COLOR_YELLOW, "F5 Save");
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 40, COLOR_YELLOW, "F9 Load");
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 28, COLOR_YELLOW, "C/I Info");
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 16, COLOR_YELLOW, "M Magic");
 }
 
 static void u2_draw_message_log(void) {
@@ -1631,10 +1796,494 @@ static void u2_draw_message_log(void) {
     }
 }
 
+static const char* u2_get_equipped_item_name(Slot slot) {
+    Item* item = game_state.session.player.sheet.equipment[slot];
+    return item != NULL ? item->name : "-";
+}
+
+static int u2_get_inventory_first_visible_index(int visible_rows) {
+    int first = game_state.session.inventory_selection_index - visible_rows + 1;
+    if (game_state.session.inventory_selection_index < visible_rows) {
+        first = 0;
+    }
+    return clamp(first, 0, max(0, game_state.session.inventory.count - visible_rows));
+}
+
+static void u2_clamp_inventory_selection(void) {
+    game_state.session.inventory_selection_index = clamp(
+        game_state.session.inventory_selection_index,
+        0,
+        max(0, game_state.session.inventory.count - 1)
+    );
+}
+
+static const char* u2_get_inventory_action_label(const Item* item) {
+    Slot equip_slot = SLOT_END;
+
+    if (u2_get_item_equip_slot(item, &equip_slot)) {
+        return "Equip";
+    }
+    if (item != NULL && strcmp(item->id, "spellbook") == 0) {
+        return "Read";
+    }
+    if (u2_item_is_consumable(item)) {
+        return "Use";
+    }
+    return "Inspect";
+}
+
+static bool u2_try_enter_transition_at_player_position(void) {
+    const U2TransitionDef* transition = NULL;
+
+    if (!u2_scene_is_looped() || game_state.session.current_map == NULL) {
+        return false;
+    }
+
+    transition = u2_find_transition(
+        game_state.session.current_map->id,
+        game_state.session.player.tile_x,
+        game_state.session.player.tile_y
+    );
+    if (transition == NULL) {
+        return false;
+    }
+
+    u2_load_scene(transition->destination_map_id, transition->destination_x, transition->destination_y);
+    u2_session_show_message(
+        &game_state.session,
+        false,
+        U2_LOG_MESSAGE_DURATION,
+        "Entered %s.",
+        game_state.session.current_map->name
+    );
+    return true;
+}
+
+static bool u2_get_spell_travel_result(
+    int start_x,
+    int start_y,
+    int dx,
+    int dy,
+    int range,
+    int* out_end_x,
+    int* out_end_y,
+    int* out_travel_steps,
+    char* out_target_entity_id,
+    size_t out_target_entity_id_size
+) {
+    bool found_any_tile = false;
+
+    if (out_end_x == NULL || out_end_y == NULL || out_travel_steps == NULL || out_target_entity_id == NULL || out_target_entity_id_size == 0) {
+        return false;
+    }
+
+    out_target_entity_id[0] = '\0';
+
+    for (int distance = 1; distance <= range; ++distance) {
+        int tile_x = 0;
+        int tile_y = 0;
+        U2Entity* entity = NULL;
+        const U2TileDef* tile = NULL;
+
+        if (!u2_get_offset_tile(start_x, start_y, dx, dy, distance, &tile_x, &tile_y)) {
+            break;
+        }
+
+        found_any_tile = true;
+        *out_end_x = tile_x;
+        *out_end_y = tile_y;
+        *out_travel_steps = distance;
+
+        entity = u2_find_scene_entity_at(tile_x, tile_y);
+        if (u2_is_hostile_entity(entity)) {
+            u2_copy_string(out_target_entity_id, out_target_entity_id_size, entity->id);
+            return true;
+        }
+
+        tile = u2_get_tile_at(game_state.session.current_map, tile_x, tile_y);
+        if (tile == NULL || !tile->passable || (entity != NULL && entity->solid)) {
+            return true;
+        }
+    }
+
+    return found_any_tile;
+}
+
+static void u2_begin_spell_projectile(
+    const U2SpellDef* spell,
+    int dx,
+    int dy,
+    int travel_steps,
+    int damage,
+    const char* target_entity_id
+) {
+    U2SpellProjectileState* projectile = &game_state.session.spell_projectile;
+
+    u2_session_clear_spell_targeting(&game_state.session);
+    u2_session_clear_message(&game_state.session);
+    u2_session_clear_spell_projectile(&game_state.session);
+
+    projectile->active = true;
+    projectile->spell_id = spell->id;
+    projectile->start_tile_x = game_state.session.player.tile_x;
+    projectile->start_tile_y = game_state.session.player.tile_y;
+    projectile->dir_x = dx;
+    projectile->dir_y = dy;
+    projectile->travel_steps = max(1, travel_steps);
+    projectile->damage = damage;
+    projectile->progress = 0.0f;
+    projectile->duration = max(0.12f, 0.05f * (float)projectile->travel_steps);
+    u2_copy_string(projectile->target_entity_id, sizeof(projectile->target_entity_id), target_entity_id);
+}
+
+static void u2_finish_spell_projectile(void) {
+    U2SpellProjectileState projectile = game_state.session.spell_projectile;
+    const U2SpellDef* spell = u2_get_active_projectile_spell();
+
+    u2_session_clear_spell_projectile(&game_state.session);
+
+    if (spell == NULL) {
+        return;
+    }
+
+    if (projectile.target_entity_id[0] != '\0') {
+        U2Entity* target = u2_find_scene_entity_by_id(projectile.target_entity_id);
+        char attack_text[U2_MESSAGE_TEXT_MAX];
+
+        if (u2_is_hostile_entity(target)) {
+            target->sheet.hp = max(0, target->sheet.hp - projectile.damage);
+            snprintf(attack_text, sizeof(attack_text), "%s crackles into %s for %d.", spell->name, target->name, projectile.damage);
+            if (target->sheet.hp <= 0) {
+                u2_handle_hostile_defeat(target, attack_text);
+            } else {
+                u2_sync_persistent_entity_state_from_entity(target);
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", attack_text);
+            }
+            u2_take_hostile_turn();
+            return;
+        }
+    }
+
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s flashes and fades.", spell->name);
+    u2_take_hostile_turn();
+}
+
+static void u2_update_spell_projectile(float dt) {
+    U2SpellProjectileState* projectile = &game_state.session.spell_projectile;
+
+    if (!projectile->active) {
+        return;
+    }
+
+    projectile->progress += dt / max(0.01f, projectile->duration);
+    if (projectile->progress >= 1.0f) {
+        projectile->progress = 1.0f;
+        u2_finish_spell_projectile();
+    }
+}
+
+static bool u2_try_launch_directional_spell(const U2SpellDef* spell, int dx, int dy) {
+    int end_x = 0;
+    int end_y = 0;
+    int travel_steps = 0;
+    char target_entity_id[32];
+    const int damage = max(1, roll_dice(spell->power_dice) + d20_get_stat_bonus(&game_state.session.player.sheet, STAT_MIND) + max(0, game_state.session.player.sheet.level - 1) / 2);
+
+    if (!u2_get_spell_travel_result(
+        game_state.session.player.tile_x,
+        game_state.session.player.tile_y,
+        dx,
+        dy,
+        spell->range,
+        &end_x,
+        &end_y,
+        &travel_steps,
+        target_entity_id,
+        sizeof(target_entity_id)
+    )) {
+        u2_session_show_message(&game_state.session, false, 0.0f, "There is no room to cast %s that way. Choose another direction.", spell->name);
+        return false;
+    }
+
+    (void)end_x;
+    (void)end_y;
+    game_state.session.player.sheet.mp -= spell->mp_cost;
+    u2_clamp_player_resources();
+    u2_begin_spell_projectile(spell, dx, dy, travel_steps, damage, target_entity_id);
+    return true;
+}
+
+static bool u2_try_cast_targeting_spell_in_direction(int dx, int dy) {
+    const U2SpellDef* spell = u2_get_targeting_spell();
+
+    if (spell == NULL) {
+        u2_session_clear_spell_targeting(&game_state.session);
+        return false;
+    }
+
+    switch (spell->effect) {
+        case U2_SPELL_DAMAGE_BOLT:
+            return u2_try_launch_directional_spell(spell, dx, dy);
+        default:
+            u2_session_clear_spell_targeting(&game_state.session);
+            return false;
+    }
+}
+
+static bool u2_try_cast_spell(const U2SpellDef* spell) {
+    Character* player = &game_state.session.player.sheet;
+
+    if (spell == NULL) {
+        return false;
+    }
+
+    if (player->mp < spell->mp_cost) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You need %d MP to cast %s.", spell->mp_cost, spell->name);
+        return false;
+    }
+
+    switch (spell->effect) {
+        case U2_SPELL_DAMAGE_BOLT:
+            u2_begin_spell_targeting(spell);
+            return true;
+        case U2_SPELL_HEAL_SELF:
+        {
+            const int max_hp = d20_get_max_hp(player);
+            const int heal_amount = max(1, roll_dice(spell->power_dice) + d20_get_stat_bonus(player, STAT_MIND));
+            const int previous_hp = player->hp;
+
+            if (player->hp >= max_hp) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You do not need %s right now.", spell->name);
+                return false;
+            }
+
+            player->mp -= spell->mp_cost;
+            player->hp = min(max_hp, player->hp + heal_amount);
+            game_state.session.panel = U2_PANEL_NONE;
+            u2_session_show_message(
+                &game_state.session,
+                false,
+                U2_LOG_MESSAGE_DURATION,
+                "%s restores %d HP.",
+                spell->name,
+                player->hp - previous_hp
+            );
+            u2_clamp_player_resources();
+            u2_take_hostile_turn();
+            return true;
+        }
+        case U2_SPELL_BLINK_FORWARD:
+        {
+            int dx = 0;
+            int dy = 0;
+            int best_x = game_state.session.player.tile_x;
+            int best_y = game_state.session.player.tile_y;
+            bool found_destination = false;
+
+            u2_get_facing_delta(game_state.session.player.facing, &dx, &dy);
+            for (int distance = 1; distance <= spell->range; ++distance) {
+                int tile_x = 0;
+                int tile_y = 0;
+                const U2TileDef* tile = NULL;
+                U2Entity* blocking_entity = NULL;
+
+                if (!u2_get_offset_tile(game_state.session.player.tile_x, game_state.session.player.tile_y, dx, dy, distance, &tile_x, &tile_y)) {
+                    break;
+                }
+
+                tile = u2_get_tile_at(game_state.session.current_map, tile_x, tile_y);
+                blocking_entity = u2_find_scene_entity_at(tile_x, tile_y);
+                if (tile == NULL || !tile->passable || (blocking_entity != NULL && blocking_entity->solid)) {
+                    break;
+                }
+
+                best_x = tile_x;
+                best_y = tile_y;
+                found_destination = true;
+            }
+
+            if (!found_destination) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "There is nowhere safe to land.");
+                return false;
+            }
+
+            player->mp -= spell->mp_cost;
+            game_state.session.player.tile_x = best_x;
+            game_state.session.player.tile_y = best_y;
+            game_state.session.panel = U2_PANEL_NONE;
+            if (u2_try_enter_transition_at_player_position()) {
+                u2_clamp_player_resources();
+                return true;
+            }
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s carries you onward.", spell->name);
+            u2_clamp_player_resources();
+            u2_take_hostile_turn();
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+static bool u2_try_equip_inventory_item(int index) {
+    ItemSlot* inventory_slot = NULL;
+    Item* new_item = NULL;
+    Item* previous_item = NULL;
+    Slot equip_slot = SLOT_END;
+
+    if (index < 0 || index >= game_state.session.inventory.count) {
+        return false;
+    }
+
+    inventory_slot = &game_state.session.inventory.slots[index];
+    if (inventory_slot->item == NULL || !u2_get_item_equip_slot(inventory_slot->item, &equip_slot)) {
+        return false;
+    }
+
+    new_item = inventory_slot->item;
+    previous_item = game_state.session.player.sheet.equipment[equip_slot];
+    if (previous_item == new_item) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s is already equipped.", new_item->name);
+        return false;
+    }
+
+    if (!u2_inventory_remove_at(&game_state.session.inventory, index, 1)) {
+        return false;
+    }
+
+    game_state.session.player.sheet.equipment[equip_slot] = new_item;
+    if (previous_item != NULL) {
+        u2_inventory_add(&game_state.session.inventory, previous_item, 1);
+    }
+
+    u2_clamp_inventory_selection();
+    game_state.session.panel = U2_PANEL_NONE;
+    u2_clamp_player_resources();
+    u2_session_show_message(
+        &game_state.session,
+        false,
+        U2_LOG_MESSAGE_DURATION,
+        "Equipped %s in %s.",
+        new_item->name,
+        u2_slot_name(equip_slot)
+    );
+    u2_take_hostile_turn();
+    return true;
+}
+
+static bool u2_try_use_inventory_item(int index) {
+    ItemSlot* inventory_slot = NULL;
+    Item* item = NULL;
+
+    if (index < 0 || index >= game_state.session.inventory.count) {
+        return false;
+    }
+
+    inventory_slot = &game_state.session.inventory.slots[index];
+    item = inventory_slot->item;
+    if (item == NULL) {
+        return false;
+    }
+
+    if (strcmp(item->id, "trail_ration") == 0) {
+        if (!u2_inventory_remove_at(&game_state.session.inventory, index, 1)) {
+            return false;
+        }
+        game_state.session.food += 20;
+        u2_clamp_inventory_selection();
+        game_state.session.panel = U2_PANEL_NONE;
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You eat a trail ration. Food +20.");
+        u2_take_hostile_turn();
+        return true;
+    }
+
+    if (strcmp(item->id, "lesser_healing_potion") == 0) {
+        const int max_hp = d20_get_max_hp(&game_state.session.player.sheet);
+        const int previous_hp = game_state.session.player.sheet.hp;
+        const int heal_amount = roll_dice("2d6");
+
+        if (previous_hp >= max_hp) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You are already at full health.");
+            return false;
+        }
+
+        if (!u2_inventory_remove_at(&game_state.session.inventory, index, 1)) {
+            return false;
+        }
+        game_state.session.player.sheet.hp = min(max_hp, previous_hp + heal_amount);
+        u2_clamp_inventory_selection();
+        game_state.session.panel = U2_PANEL_NONE;
+        u2_session_show_message(
+            &game_state.session,
+            false,
+            U2_LOG_MESSAGE_DURATION,
+            "You drink a healing potion and recover %d HP.",
+            game_state.session.player.sheet.hp - previous_hp
+        );
+        u2_take_hostile_turn();
+        return true;
+    }
+
+    if (strcmp(item->id, "focus_tonic") == 0) {
+        const int max_mp = d20_get_max_mp(&game_state.session.player.sheet);
+        const int previous_mp = game_state.session.player.sheet.mp;
+        const int restore_amount = roll_dice("2d4");
+
+        if (max_mp <= 0 || previous_mp >= max_mp) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your spirit is already steady.");
+            return false;
+        }
+
+        if (!u2_inventory_remove_at(&game_state.session.inventory, index, 1)) {
+            return false;
+        }
+        game_state.session.player.sheet.mp = min(max_mp, previous_mp + restore_amount);
+        u2_clamp_inventory_selection();
+        game_state.session.panel = U2_PANEL_NONE;
+        u2_session_show_message(
+            &game_state.session,
+            false,
+            U2_LOG_MESSAGE_DURATION,
+            "You drink a focus tonic and recover %d MP.",
+            game_state.session.player.sheet.mp - previous_mp
+        );
+        u2_take_hostile_turn();
+        return true;
+    }
+
+    if (strcmp(item->id, "spellbook") == 0) {
+        if (u2_get_player_spell_count() <= 0) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "The spellbook's pages remain stubbornly quiet.");
+            return false;
+        }
+        u2_open_spell_panel();
+        return true;
+    }
+
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You cannot figure out how to use %s.", item->name);
+    return false;
+}
+
+static bool u2_try_activate_inventory_selection(void) {
+    const int index = game_state.session.inventory_selection_index;
+    const ItemSlot* slot = index >= 0 && index < game_state.session.inventory.count ? &game_state.session.inventory.slots[index] : NULL;
+    Slot equip_slot = SLOT_END;
+
+    if (slot == NULL || slot->item == NULL) {
+        return false;
+    }
+
+    if (u2_get_item_equip_slot(slot->item, &equip_slot)) {
+        return u2_try_equip_inventory_item(index);
+    }
+
+    return u2_try_use_inventory_item(index);
+}
+
 static void u2_draw_character_panel(void) {
     char damage_text[64];
-    const int w = 210;
-    const int h = 140;
+    const int w = 232;
+    const int h = 184;
     const int x = (screen_size.x - w) / 2;
     const int y = (screen_size.y - h) / 2;
     Character* player = &game_state.session.player.sheet;
@@ -1645,41 +2294,138 @@ static void u2_draw_character_panel(void) {
     ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "CHARACTER");
     ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "%s", game_state.session.player_name);
     ascii_font_draw(chao_canvas, font, x + 10, y + 36, COLOR_LIGHTGRAY, "%s", u2_class_name(game_state.session.chosen_class));
-    ascii_font_draw(chao_canvas, font, x + 10, y + 52, COLOR_WHITE, "HP %d/%d", player->hp, d20_get_max_hp(player));
-    ascii_font_draw(chao_canvas, font, x + 10, y + 64, COLOR_WHITE, "MP %d/%d", player->mp, d20_get_max_mp(player));
-    ascii_font_draw(chao_canvas, font, x + 10, y + 80, COLOR_LIGHTGRAY, "STR %d  DEX %d  MND %d", player->stats[STAT_STR], player->stats[STAT_DEX], player->stats[STAT_MIND]);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 92, COLOR_LIGHTGRAY, "PHY %d  SUB %d", player->skills[SKILL_PHYSICAL], player->skills[SKILL_SUBTERFUGE]);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 104, COLOR_LIGHTGRAY, "KNO %d  COM %d", player->skills[SKILL_KNOWLEDGE], player->skills[SKILL_COMMUNICATION]);
-    ascii_font_draw(chao_canvas, font, x + 10, y + 116, COLOR_WHITE, "AC %d  DMG %s", d20_get_armor_class(player), damage_text);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 48, COLOR_WHITE, "LV %d  XP %d/%d", player->level, player->exp, d20_get_exp_for_level(player->level + 1));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 60, COLOR_WHITE, "HP %d/%d", player->hp, d20_get_max_hp(player));
+    ascii_font_draw(chao_canvas, font, x + 114, y + 60, COLOR_WHITE, "MP %d/%d", player->mp, d20_get_max_mp(player));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 74, COLOR_LIGHTGRAY, "STR %d  DEX %d  MND %d", player->stats[STAT_STR], player->stats[STAT_DEX], player->stats[STAT_MIND]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 86, COLOR_LIGHTGRAY, "PHY %d  SUB %d", player->skills[SKILL_PHYSICAL], player->skills[SKILL_SUBTERFUGE]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 98, COLOR_LIGHTGRAY, "KNO %d  COM %d", player->skills[SKILL_KNOWLEDGE], player->skills[SKILL_COMMUNICATION]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 110, COLOR_WHITE, "AC %d  DMG %s", d20_get_armor_class(player), damage_text);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 126, COLOR_LIGHTGRAY, "Weapon: %s", u2_get_equipped_item_name(SLOT_HAND_RIGHT));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 138, COLOR_LIGHTGRAY, "Offhand: %s", u2_get_equipped_item_name(SLOT_HAND_LEFT));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 150, COLOR_LIGHTGRAY, "Body: %s", u2_get_equipped_item_name(SLOT_BODY));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 164, COLOR_YELLOW, "Stat points banked: %d", player->stat_points);
 }
 
 static void u2_draw_inventory_panel(void) {
-    const int w = 210;
-    const int h = 150;
+    const int w = 254;
+    const int h = 188;
     const int x = (screen_size.x - w) / 2;
     const int y = (screen_size.y - h) / 2;
+    const int visible_rows = 8;
+    const int first_visible = u2_get_inventory_first_visible_index(visible_rows);
 
     u2_draw_panel(x, y, w, h);
     ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "INVENTORY");
     ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "Gold %d  Food %d", game_state.session.gold, game_state.session.food);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 40, COLOR_LIGHTGRAY, "Weapon: %s", u2_get_equipped_item_name(SLOT_HAND_RIGHT));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 52, COLOR_LIGHTGRAY, "Offhand: %s", u2_get_equipped_item_name(SLOT_HAND_LEFT));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 64, COLOR_LIGHTGRAY, "Body: %s", u2_get_equipped_item_name(SLOT_BODY));
 
     if (game_state.session.inventory.count == 0) {
-        ascii_font_draw(chao_canvas, font, x + 10, y + 42, COLOR_LIGHTGRAY, "(empty)");
+        ascii_font_draw(chao_canvas, font, x + 10, y + 88, COLOR_LIGHTGRAY, "(empty)");
+        ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Esc closes");
         return;
     }
 
-    for (int i = 0; i < game_state.session.inventory.count && i < 8; ++i) {
-        const ItemSlot* slot = &game_state.session.inventory.slots[i];
+    for (int row = 0; row < visible_rows; ++row) {
+        const int i = first_visible + row;
+        const ItemSlot* slot = NULL;
+        const bool selected = i == game_state.session.inventory_selection_index;
+
+        if (i >= game_state.session.inventory.count) {
+            break;
+        }
+
+        slot = &game_state.session.inventory.slots[i];
         if (slot->item == NULL) {
             continue;
         }
 
         if (slot->amount > 1) {
-            ascii_font_draw(chao_canvas, font, x + 10, y + 42 + i * 12, COLOR_LIGHTGRAY, "%dx %s", (int)slot->amount, slot->item->name);
+            ascii_font_draw(
+                chao_canvas,
+                font,
+                x + 10,
+                y + 88 + row * 12,
+                selected ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s %dx %s",
+                selected ? ">" : " ",
+                (int)slot->amount,
+                slot->item->name
+            );
         } else {
-            ascii_font_draw(chao_canvas, font, x + 10, y + 42 + i * 12, COLOR_LIGHTGRAY, "%s", slot->item->name);
+            ascii_font_draw(
+                chao_canvas,
+                font,
+                x + 10,
+                y + 88 + row * 12,
+                selected ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s %s",
+                selected ? ">" : " ",
+                slot->item->name
+            );
         }
     }
+
+    if (game_state.session.inventory_selection_index >= 0 &&
+        game_state.session.inventory_selection_index < game_state.session.inventory.count &&
+        game_state.session.inventory.slots[game_state.session.inventory_selection_index].item != NULL) {
+        ascii_font_draw(
+            chao_canvas,
+            font,
+            x + 10,
+            y + h - 30,
+            COLOR_LIGHTGRAY,
+            "%s: %s",
+            u2_get_inventory_action_label(game_state.session.inventory.slots[game_state.session.inventory_selection_index].item),
+            game_state.session.inventory.slots[game_state.session.inventory_selection_index].item->name
+        );
+    }
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Up/Down select  Enter acts  Esc closes");
+}
+
+static void u2_draw_spell_panel(void) {
+    const int w = 250;
+    const int h = 148;
+    const int x = (screen_size.x - w) / 2;
+    const int y = (screen_size.y - h) / 2;
+    const int spell_count = u2_get_player_spell_count();
+    const U2SpellDef* selected_spell = u2_get_player_spell_by_index(game_state.session.spell_selection_index);
+
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "SPELLS");
+    ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
+
+    if (spell_count <= 0) {
+        ascii_font_draw(chao_canvas, font, x + 10, y + 44, COLOR_LIGHTGRAY, "No spells known.");
+        ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Esc closes");
+        return;
+    }
+
+    for (int i = 0; i < spell_count; ++i) {
+        const U2SpellDef* spell = u2_get_player_spell_by_index(i);
+        if (spell == NULL) {
+            continue;
+        }
+
+        ascii_font_draw(
+            chao_canvas,
+            font,
+            x + 10,
+            y + 44 + i * 12,
+            i == game_state.session.spell_selection_index ? COLOR_WHITE : COLOR_LIGHTGRAY,
+            "%s %s - %d MP",
+            i == game_state.session.spell_selection_index ? ">" : " ",
+            spell->name,
+            spell->mp_cost
+        );
+    }
+
+    if (selected_spell != NULL) {
+        u2_draw_wrapped_text(x + 10, y + 86, w - 20, COLOR_LIGHTGRAY, selected_spell->description);
+    }
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Up/Down select  Enter casts  Esc closes");
 }
 
 static void u2_draw_service_panel(void) {
@@ -2123,6 +2869,7 @@ static void u2_draw_gameplay(void) {
 
     u2_draw_world();
     u2_draw_scene_entities();
+    u2_draw_spell_projectile();
     u2_draw_hud();
     u2_draw_message_log();
 
@@ -2130,62 +2877,15 @@ static void u2_draw_gameplay(void) {
         u2_draw_character_panel();
     } else if (game_state.session.panel == U2_PANEL_INVENTORY) {
         u2_draw_inventory_panel();
+    } else if (game_state.session.panel == U2_PANEL_SPELLS) {
+        u2_draw_spell_panel();
     } else if (game_state.session.panel == U2_PANEL_SERVICE) {
         u2_draw_service_panel();
     }
 }
 
 static void u2_draw_combat(void) {
-    char player_damage[64];
-    char enemy_damage[64];
-    const int w = 304;
-    const int h = 188;
-    const int x = (screen_size.x - w) / 2;
-    const int y = 24;
-    const int log_y = y + 96;
-
     u2_draw_gameplay();
-    u2_draw_panel(x, y, w, h);
-
-    d20_get_damage_string(&game_state.session.player.sheet, SLOT_HAND_RIGHT, player_damage);
-    d20_get_damage_string(&game_state.session.combat.enemy.sheet, SLOT_HAND_RIGHT, enemy_damage);
-
-    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 10, COLOR_YELLOW, TEXT_ALIGN_CENTER, -1, "ENCOUNTER");
-
-    u2_draw_tile(game_state.session.player.tile, x + 18, y + 26);
-    ascii_font_draw(chao_canvas, font, x + 40, y + 28, COLOR_WHITE, "%s", game_state.session.player_name);
-    ascii_font_draw(chao_canvas, font, x + 40, y + 40, COLOR_LIGHTGRAY, "HP %d/%d", game_state.session.player.sheet.hp, d20_get_max_hp(&game_state.session.player.sheet));
-    ascii_font_draw(chao_canvas, font, x + 40, y + 52, COLOR_LIGHTGRAY, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
-    ascii_font_draw(chao_canvas, font, x + 40, y + 64, COLOR_LIGHTGRAY, "AC %d  DMG %s", d20_get_armor_class(&game_state.session.player.sheet), player_damage);
-
-    u2_draw_tile(game_state.session.combat.enemy.tile, x + 186, y + 26);
-    ascii_font_draw(chao_canvas, font, x + 208, y + 28, COLOR_WHITE, "%s", game_state.session.combat.enemy.name);
-    ascii_font_draw(chao_canvas, font, x + 208, y + 40, COLOR_LIGHTGRAY, "HP %d/%d", max(0, game_state.session.combat.enemy.sheet.hp), d20_get_max_hp(&game_state.session.combat.enemy.sheet));
-    ascii_font_draw(chao_canvas, font, x + 208, y + 52, COLOR_LIGHTGRAY, "MP %d/%d", max(0, game_state.session.combat.enemy.sheet.mp), d20_get_max_mp(&game_state.session.combat.enemy.sheet));
-    ascii_font_draw(chao_canvas, font, x + 208, y + 64, COLOR_LIGHTGRAY, "AC %d  DMG %s", d20_get_armor_class(&game_state.session.combat.enemy.sheet), enemy_damage);
-
-    ascii_font_draw(chao_canvas, font, x + 12, y + 82, COLOR_YELLOW, "Battle Log");
-    u2_draw_wrapped_text(x + 12, log_y, w - 24, COLOR_WHITE, game_state.session.combat.log);
-
-    ascii_font_draw(
-        chao_canvas,
-        font,
-        x + 12,
-        y + h - 34,
-        game_state.session.combat.selection_index == 0 ? COLOR_WHITE : COLOR_LIGHTGRAY,
-        "%s Attack",
-        game_state.session.combat.selection_index == 0 ? ">" : " "
-    );
-    ascii_font_draw(
-        chao_canvas,
-        font,
-        x + 12,
-        y + h - 22,
-        game_state.session.combat.selection_index == 1 ? COLOR_WHITE : COLOR_LIGHTGRAY,
-        "%s Flee",
-        game_state.session.combat.selection_index == 1 ? ">" : " "
-    );
-    ascii_font_draw(chao_canvas, font, x + 126, y + h - 16, COLOR_YELLOW, "Up/Down select  Enter acts  A/F quick");
 }
 
 static void game_draw(void) {
@@ -2267,6 +2967,11 @@ static void u2_try_move_player(U2MoveDirection direction) {
 
     blocking_entity = u2_find_scene_entity_at(target_x, target_y);
     if (blocking_entity != NULL && blocking_entity->solid) {
+        if (u2_is_hostile_entity(blocking_entity)) {
+            u2_resolve_player_bump_attack(blocking_entity);
+            u2_take_hostile_turn();
+            return;
+        }
         u2_interact_with_entity(blocking_entity);
         return;
     }
@@ -2302,9 +3007,9 @@ static void u2_try_move_player(U2MoveDirection direction) {
             );
             return;
         }
-
-        u2_take_hostile_turn();
     }
+
+    u2_take_hostile_turn();
 }
 
 static void u2_update_message_timer(float dt) {
@@ -2363,46 +3068,8 @@ static void u2_update_class_select(void) {
 }
 
 static void u2_update_combat(void) {
-    if (!game_state.session.combat.active) {
-        game_state.session.flow_state = U2_FLOW_PLAYING;
-        return;
-    }
-
-    if (input.just_pressed[KEY_F5] || input.just_pressed[KEY_F9]) {
-        u2_set_combat_log("You cannot save or load while steel is drawn.");
-        return;
-    }
-
-    if (input.just_pressed[KEY_UP] || input.just_pressed[KEY_LEFT]) {
-        game_state.session.combat.selection_index--;
-        if (game_state.session.combat.selection_index < 0) {
-            game_state.session.combat.selection_index = 1;
-        }
-        return;
-    }
-
-    if (input.just_pressed[KEY_DOWN] || input.just_pressed[KEY_RIGHT]) {
-        game_state.session.combat.selection_index = (game_state.session.combat.selection_index + 1) % 2;
-        return;
-    }
-
-    if (input.just_pressed[KEY_A]) {
-        u2_resolve_player_combat_attack();
-        return;
-    }
-
-    if (input.just_pressed[KEY_F] || input.just_pressed[KEY_ESC]) {
-        u2_try_flee_from_combat();
-        return;
-    }
-
-    if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
-        if (game_state.session.combat.selection_index == 0) {
-            u2_resolve_player_combat_attack();
-        } else {
-            u2_try_flee_from_combat();
-        }
-    }
+    u2_session_clear_combat(&game_state.session);
+    game_state.session.flow_state = U2_FLOW_PLAYING;
 }
 
 static void u2_update_gameplay_ui(void) {
@@ -2425,6 +3092,31 @@ static void u2_update_gameplay_ui(void) {
     if (game_state.session.message.visible && game_state.session.message.modal) {
         if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE] || input.just_pressed[KEY_ESC]) {
             u2_session_clear_message(&game_state.session);
+        }
+        return;
+    }
+
+    if (game_state.session.spell_targeting.active) {
+        if (input.just_pressed[KEY_ESC] || input.just_pressed[KEY_M]) {
+            u2_session_clear_spell_targeting(&game_state.session);
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Spell canceled.");
+            return;
+        }
+        if (input.just_pressed[KEY_LEFT]) {
+            u2_try_cast_targeting_spell_in_direction(-1, 0);
+            return;
+        }
+        if (input.just_pressed[KEY_RIGHT]) {
+            u2_try_cast_targeting_spell_in_direction(1, 0);
+            return;
+        }
+        if (input.just_pressed[KEY_UP]) {
+            u2_try_cast_targeting_spell_in_direction(0, -1);
+            return;
+        }
+        if (input.just_pressed[KEY_DOWN]) {
+            u2_try_cast_targeting_spell_in_direction(0, 1);
+            return;
         }
         return;
     }
@@ -2460,8 +3152,69 @@ static void u2_update_gameplay_ui(void) {
         return;
     }
 
+    if (game_state.session.panel == U2_PANEL_INVENTORY) {
+        u2_clamp_inventory_selection();
+
+        if (input.just_pressed[KEY_ESC] || input.just_pressed[KEY_I]) {
+            game_state.session.panel = U2_PANEL_NONE;
+            return;
+        }
+        if (game_state.session.inventory.count <= 0) {
+            return;
+        }
+        if (input.just_pressed[KEY_UP]) {
+            game_state.session.inventory_selection_index--;
+            if (game_state.session.inventory_selection_index < 0) {
+                game_state.session.inventory_selection_index = game_state.session.inventory.count - 1;
+            }
+            return;
+        }
+        if (input.just_pressed[KEY_DOWN]) {
+            game_state.session.inventory_selection_index++;
+            if (game_state.session.inventory_selection_index >= game_state.session.inventory.count) {
+                game_state.session.inventory_selection_index = 0;
+            }
+            return;
+        }
+        if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
+            u2_try_activate_inventory_selection();
+        }
+        return;
+    }
+
+    if (game_state.session.panel == U2_PANEL_SPELLS) {
+        const int spell_count = u2_get_player_spell_count();
+
+        if (input.just_pressed[KEY_ESC] || input.just_pressed[KEY_M]) {
+            game_state.session.panel = U2_PANEL_NONE;
+            return;
+        }
+        if (spell_count <= 0) {
+            return;
+        }
+        if (input.just_pressed[KEY_UP]) {
+            game_state.session.spell_selection_index--;
+            if (game_state.session.spell_selection_index < 0) {
+                game_state.session.spell_selection_index = spell_count - 1;
+            }
+            return;
+        }
+        if (input.just_pressed[KEY_DOWN]) {
+            game_state.session.spell_selection_index++;
+            if (game_state.session.spell_selection_index >= spell_count) {
+                game_state.session.spell_selection_index = 0;
+            }
+            return;
+        }
+        if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
+            u2_try_cast_spell(u2_get_player_spell_by_index(game_state.session.spell_selection_index));
+        }
+        return;
+    }
+
     if (game_state.session.panel != U2_PANEL_NONE) {
-        if (input.just_pressed[KEY_ESC] || (game_state.session.panel == U2_PANEL_CHARACTER && input.just_pressed[KEY_C]) || (game_state.session.panel == U2_PANEL_INVENTORY && input.just_pressed[KEY_I])) {
+        if (input.just_pressed[KEY_ESC] ||
+            (game_state.session.panel == U2_PANEL_CHARACTER && input.just_pressed[KEY_C])) {
             game_state.session.panel = U2_PANEL_NONE;
         }
         return;
@@ -2477,7 +3230,15 @@ static void u2_update_gameplay_ui(void) {
         return;
     }
     if (input.just_pressed[KEY_I]) {
-        game_state.session.panel = U2_PANEL_INVENTORY;
+        u2_open_inventory_panel();
+        return;
+    }
+    if (input.just_pressed[KEY_M]) {
+        if (u2_get_player_spell_count() > 0) {
+            u2_open_spell_panel();
+        } else {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "This class knows no spells yet.");
+        }
         return;
     }
 }
@@ -2506,7 +3267,15 @@ static void u2_update_player_movement(float dt) {
 }
 
 static void u2_update_gameplay(float dt) {
+    const bool had_active_projectile = game_state.session.spell_projectile.active;
+
     u2_update_message_timer(dt);
+    if (had_active_projectile) {
+        u2_update_spell_projectile(dt);
+        u2_update_camera(dt);
+        return;
+    }
+
     u2_update_gameplay_ui();
 
     if (u2_session_input_locked(&game_state.session)) {

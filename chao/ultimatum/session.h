@@ -30,6 +30,7 @@ typedef enum {
     U2_PANEL_CHARACTER,
     U2_PANEL_INVENTORY,
     U2_PANEL_SERVICE,
+    U2_PANEL_SPELLS,
 } U2PanelType;
 
 typedef enum {
@@ -75,6 +76,25 @@ typedef struct {
 } U2CombatState;
 
 typedef struct {
+    bool active;
+    const char* spell_id;
+} U2SpellTargetingState;
+
+typedef struct {
+    bool active;
+    const char* spell_id;
+    int start_tile_x;
+    int start_tile_y;
+    int dir_x;
+    int dir_y;
+    int travel_steps;
+    int damage;
+    char target_entity_id[32];
+    float progress;
+    float duration;
+} U2SpellProjectileState;
+
+typedef struct {
     bool started;
     char player_name[U2_PLAYER_NAME_MAX];
     CharacterClass chosen_class;
@@ -92,10 +112,14 @@ typedef struct {
     float move_repeat_timer;
     U2MoveDirection held_move_direction;
     U2Inventory inventory;
+    int inventory_selection_index;
+    int spell_selection_index;
     const char* active_service_entity_id;
     int service_selection_index;
     U2PersistentEntityState persistent_entities[U2_MAX_ENTITIES];
     U2CombatState combat;
+    U2SpellTargetingState spell_targeting;
+    U2SpellProjectileState spell_projectile;
     U2MessageState message;
 } U2GameSession;
 
@@ -131,12 +155,43 @@ static bool u2_inventory_add_by_id(U2Inventory* inventory, const char* item_id, 
     return u2_inventory_add(inventory, items_get(item_id), amount);
 }
 
+static bool u2_inventory_remove_at(U2Inventory* inventory, int index, size_t amount) {
+    if (inventory == NULL || index < 0 || index >= inventory->count || amount == 0) {
+        return false;
+    }
+
+    if (inventory->slots[index].item == NULL || inventory->slots[index].amount < amount) {
+        return false;
+    }
+
+    inventory->slots[index].amount -= amount;
+    if (inventory->slots[index].amount > 0) {
+        return true;
+    }
+
+    for (int i = index; i < inventory->count - 1; ++i) {
+        inventory->slots[i] = inventory->slots[i + 1];
+    }
+
+    memset(&inventory->slots[inventory->count - 1], 0, sizeof(inventory->slots[inventory->count - 1]));
+    inventory->count--;
+    return true;
+}
+
 static void u2_session_clear_scene_entities(U2GameSession* session) {
     memset(session->scene_entities, 0, sizeof(session->scene_entities));
 }
 
 static void u2_session_clear_combat(U2GameSession* session) {
     memset(&session->combat, 0, sizeof(session->combat));
+}
+
+static void u2_session_clear_spell_targeting(U2GameSession* session) {
+    memset(&session->spell_targeting, 0, sizeof(session->spell_targeting));
+}
+
+static void u2_session_clear_spell_projectile(U2GameSession* session) {
+    memset(&session->spell_projectile, 0, sizeof(session->spell_projectile));
 }
 
 static void u2_session_clear_message(U2GameSession* session) {
@@ -162,7 +217,10 @@ static void u2_session_show_message(U2GameSession* session, bool modal, float ti
 }
 
 static bool u2_session_input_locked(const U2GameSession* session) {
-    return session->panel != U2_PANEL_NONE || (session->message.visible && session->message.modal);
+    return session->panel != U2_PANEL_NONE ||
+        session->spell_targeting.active ||
+        session->spell_projectile.active ||
+        (session->message.visible && session->message.modal);
 }
 
 static void u2_session_init(U2GameSession* session) {
@@ -175,10 +233,14 @@ static void u2_session_init(U2GameSession* session) {
     session->active_service_entity_id = NULL;
     session->service_selection_index = 0;
     session->class_selection_index = 0;
+    session->inventory_selection_index = 0;
+    session->spell_selection_index = 0;
     u2_inventory_clear(&session->inventory);
     u2_session_clear_scene_entities(session);
     memset(session->persistent_entities, 0, sizeof(session->persistent_entities));
     u2_session_clear_combat(session);
+    u2_session_clear_spell_targeting(session);
+    u2_session_clear_spell_projectile(session);
     u2_session_clear_message(session);
 }
 
