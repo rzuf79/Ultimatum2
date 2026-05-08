@@ -1,0 +1,2075 @@
+#ifndef GAME_H
+#define GAME_H
+
+#include <math.h>
+#include <string.h>
+#include "../chao/chao.h"
+#include "session.h"
+#include "world_data.h"
+
+enum {
+    U2_VIEW_WIDTH = 320,
+    U2_VIEW_HEIGHT = 240,
+    U2_HUD_WIDTH = 104,
+    U2_LOG_HEIGHT = 38,
+    U2_PANEL_MARGIN = 8,
+};
+
+static const float U2_STEP_DELAY = 0.20f;
+static const float U2_SPRINT_STEP_DELAY = 0.10f;
+static const float U2_LOG_MESSAGE_DURATION = 2.75f;
+static const float U2_CAMERA_SMOOTHNESS = 12.0f;
+static const float U2_MESSAGE_REVEAL_CHARS_PER_SECOND = 120.0f;
+static const float U2_ENCOUNTER_MESSAGE_COOLDOWN = 0.75f;
+static const int U2_STEPS_PER_FOOD_DEPLETION = 4;
+static const int U2_STEPS_PER_FOOD_REGEN = 7;
+static const int U2_MONSTER_CHASE_RADIUS = 8;
+static const char* U2_SAVE_FILE_PATH = "savegame.u2sav";
+
+enum {
+    U2_SAVE_ID_MAX = 32,
+    U2_SAVE_DAMAGE_MAX = 16,
+    U2_SAVE_MAGIC_SIZE = 4,
+    U2_SAVE_VERSION = 1,
+};
+
+static AsciiFont* font;
+static Bitmap* font_bitmap;
+
+typedef struct {
+    const U2TileDef* tile_lookup[256];
+    float camera_x;
+    float camera_y;
+    NineSlice frame_slice;
+    U2GameSession session;
+} UltimatumGameState;
+
+typedef struct {
+    char item_id[U2_SAVE_ID_MAX];
+    int amount;
+} U2SavedInventorySlot;
+
+typedef struct {
+    int class_id;
+    int base_hp;
+    int base_mp;
+    char base_damage[U2_SAVE_DAMAGE_MAX];
+    int armor_class;
+    int hp;
+    int mp;
+    int stats[3];
+    int skills[4];
+    int level;
+    int exp;
+    int stat_points;
+    char equipment_ids[SLOT_END][U2_SAVE_ID_MAX];
+} U2SavedCharacter;
+
+typedef struct {
+    int active;
+    char id[U2_SAVE_ID_MAX];
+    int tile_x;
+    int tile_y;
+    int facing;
+    int hp;
+    int mp;
+} U2SavedSceneEntity;
+
+typedef struct {
+    char magic[U2_SAVE_MAGIC_SIZE];
+    int version;
+    char player_name[U2_PLAYER_NAME_MAX];
+    int chosen_class;
+    char current_map_id[U2_SAVE_ID_MAX];
+    int player_tile_x;
+    int player_tile_y;
+    int player_facing;
+    int gold;
+    int food;
+    int food_depletion_step_counter;
+    int food_regen_step_counter;
+    U2SavedCharacter player;
+    int inventory_count;
+    U2SavedInventorySlot inventory[U2_MAX_INVENTORY_SLOTS];
+    int scene_entity_count;
+    U2SavedSceneEntity scene_entities[U2_MAX_SCENE_ENTITIES];
+} U2SaveData;
+
+static UltimatumGameState game_state;
+
+static void u2_copy_string(char* dst, size_t dst_size, const char* src) {
+    if (dst == NULL || dst_size == 0) {
+        return;
+    }
+
+    snprintf(dst, dst_size, "%s", src != NULL ? src : "");
+}
+
+static int u2_world_view_width(void) {
+    return screen_size.x - U2_HUD_WIDTH;
+}
+
+static int u2_world_view_height(void) {
+    return screen_size.y;
+}
+
+static float u2_wrapf(float value, float size) {
+    if (size <= 0.0f) {
+        return 0.0f;
+    }
+
+    while (value < 0.0f) {
+        value += size;
+    }
+    while (value >= size) {
+        value -= size;
+    }
+
+    return value;
+}
+
+static float u2_wrap_deltaf(float from, float to, float size) {
+    float delta = to - from;
+    if (size <= 0.0f) {
+        return delta;
+    }
+    while (delta > size * 0.5f) {
+        delta -= size;
+    }
+    while (delta < -size * 0.5f) {
+        delta += size;
+    }
+    return delta;
+}
+
+static void u2_build_tile_lookup(void) {
+    memset(game_state.tile_lookup, 0, sizeof(game_state.tile_lookup));
+
+    for (size_t i = 0; i < u2_tile_defs_count; ++i) {
+        const unsigned char symbol = (unsigned char)u2_tile_defs[i].symbol;
+        if (game_state.tile_lookup[symbol] == NULL) {
+            game_state.tile_lookup[symbol] = &u2_tile_defs[i];
+        }
+    }
+}
+
+static int u2_current_map_pixel_width(void) {
+    return game_state.session.current_map == NULL ? 0 : game_state.session.current_map->width * U2_TILE_SIZE;
+}
+
+static int u2_current_map_pixel_height(void) {
+    return game_state.session.current_map == NULL ? 0 : game_state.session.current_map->height * U2_TILE_SIZE;
+}
+
+static bool u2_scene_is_looped(void) {
+    return game_state.session.scene_type == U2_SCENE_OVERWORLD;
+}
+
+static const char* u2_class_name(CharacterClass class_id) {
+    const U2ClassTemplate* class_template = u2_find_class_template(class_id);
+    return class_template != NULL ? class_template->name : "None";
+}
+
+static const U2TileDef* u2_get_tile_at(const U2MapDef* map, int tile_x, int tile_y) {
+    if (map == NULL || tile_x < 0 || tile_y < 0 || tile_x >= map->width || tile_y >= map->height) {
+        return NULL;
+    }
+
+    const unsigned char symbol = (unsigned char)map->rows[tile_y][tile_x];
+    return game_state.tile_lookup[symbol];
+}
+
+static const char* u2_get_blocked_message(const U2TileDef* tile) {
+    if (tile == NULL) {
+        return "You cannot go that way.";
+    }
+    if (strcmp(tile->name, "water") == 0) {
+        return "The water blocks your way.";
+    }
+    if (strcmp(tile->name, "mountains") == 0) {
+        return "The mountains are impassable.";
+    }
+    if (strcmp(tile->name, "wall") == 0 || strcmp(tile->name, "door") == 0) {
+        return "The wall bars your way.";
+    }
+    return "That way is blocked.";
+}
+
+static const char* u2_get_unimplemented_message(const U2TileDef* tile) {
+    if (tile == NULL) {
+        return NULL;
+    }
+    if (strcmp(tile->name, "dungeon") == 0 || strcmp(tile->name, "tower") == 0) {
+        return "Roguelike dungeons and towers are not implemented yet.";
+    }
+    if (strcmp(tile->name, "portal") == 0) {
+        return "Portals and planetary travel are not implemented yet.";
+    }
+    return NULL;
+}
+
+static void u2_draw_tile(const U2TileDef* tile, int x, int y) {
+    if (tile == NULL) {
+        fill_rect(chao_canvas, x, y, U2_TILE_SIZE, U2_TILE_SIZE, COLOR_MAGENTA);
+        draw_rect(chao_canvas, x, y, U2_TILE_SIZE, U2_TILE_SIZE, 1, COLOR_BLACK);
+        return;
+    }
+
+    RectInt src = {
+        tile->atlas_x * U2_TILE_SIZE,
+        tile->atlas_y * U2_TILE_SIZE,
+        U2_TILE_SIZE,
+        U2_TILE_SIZE
+    };
+
+    blit_rect(chao_canvas, AGB("tiles"), src, (Vector2Int){x, y}, tile->tint);
+}
+
+static void u2_draw_panel(int x, int y, int w, int h) {
+    fill_rect(chao_canvas, x + 3, y + 3, w - 6, h - 6, COLOR_BLACK);
+    nine_slice_draw(chao_canvas, game_state.frame_slice, x, y, w, h);
+}
+
+static void u2_draw_wrapped_text(int x, int y, int max_width, uint32_t color, const char* text) {
+    char* wrapped = ascii_font_break_lines(font, max_width, "%s", text);
+    ascii_font_draw(chao_canvas, font, x, y, color, "%s", wrapped);
+    free(wrapped);
+}
+
+static Vector2Int u2_get_wrapped_text_size(int max_width, const char* text) {
+    Vector2Int size = { 0, 0 };
+    char* wrapped = ascii_font_break_lines(font, max_width, "%s", text);
+    size = ascii_font_get_size(font, wrapped, -1);
+    free(wrapped);
+    return size;
+}
+
+static void u2_get_revealed_wrapped_message_text(int max_width, char* dst, size_t dst_size) {
+    char* wrapped = ascii_font_break_lines(font, max_width, "%s", game_state.session.message.text);
+    const int visible_chars = game_state.session.message.visible_chars;
+    size_t out_i = 0;
+    int revealed_raw_chars = 0;
+
+    for (size_t i = 0; wrapped[i] != '\0' && out_i + 1 < dst_size; ++i) {
+        if (wrapped[i] == '\n') {
+            dst[out_i++] = '\n';
+            continue;
+        }
+
+        if (revealed_raw_chars >= visible_chars) {
+            break;
+        }
+
+        dst[out_i++] = wrapped[i];
+        revealed_raw_chars++;
+    }
+
+    dst[out_i] = '\0';
+    free(wrapped);
+}
+
+static void u2_get_facing_delta(U2Facing facing, int* out_dx, int* out_dy) {
+    *out_dx = 0;
+    *out_dy = 0;
+
+    switch (facing) {
+        case U2_FACING_WEST: *out_dx = -1; break;
+        case U2_FACING_EAST: *out_dx = 1; break;
+        case U2_FACING_NORTH: *out_dy = -1; break;
+        case U2_FACING_SOUTH: *out_dy = 1; break;
+    }
+}
+
+static bool u2_get_offset_tile(int start_x, int start_y, int dx, int dy, int distance, int* out_x, int* out_y) {
+    int tile_x = start_x + dx * distance;
+    int tile_y = start_y + dy * distance;
+
+    if (u2_scene_is_looped()) {
+        tile_x = u2_entity_wrap_coord(tile_x, game_state.session.current_map->width);
+        tile_y = u2_entity_wrap_coord(tile_y, game_state.session.current_map->height);
+    } else if (tile_x < 0 || tile_y < 0 || tile_x >= game_state.session.current_map->width || tile_y >= game_state.session.current_map->height) {
+        return false;
+    }
+
+    *out_x = tile_x;
+    *out_y = tile_y;
+    return true;
+}
+
+static bool u2_is_counter_tile(const U2TileDef* tile) {
+    if (tile == NULL) {
+        return false;
+    }
+
+    return strcmp(tile->name, "deskLeft") == 0 ||
+        strcmp(tile->name, "desk") == 0 ||
+        strcmp(tile->name, "deskRight") == 0;
+}
+
+static uint32_t u2_get_food_color(void) {
+    return game_state.session.food > 0 ? COLOR_WHITE : COLOR_RED;
+}
+
+static const U2ServiceDef* u2_get_active_service_def(void) {
+    return u2_find_service_def(game_state.session.active_service_entity_id);
+}
+
+static void u2_close_service_panel(void) {
+    game_state.session.panel = U2_PANEL_NONE;
+    game_state.session.active_service_entity_id = NULL;
+    game_state.session.service_selection_index = 0;
+}
+
+static void u2_open_service_panel(const U2Entity* entity) {
+    const U2ServiceDef* service = u2_find_service_def(entity->id);
+    if (service == NULL) {
+        return;
+    }
+
+    game_state.session.panel = U2_PANEL_SERVICE;
+    game_state.session.active_service_entity_id = service->entity_id;
+    game_state.session.service_selection_index = 0;
+}
+
+static void u2_scene_clear_entities(void) {
+    u2_session_clear_scene_entities(&game_state.session);
+}
+
+static void u2_assign_spawn_sheet(U2Entity* entity, const U2SpawnDef* spawn_def) {
+    const U2MonsterTemplate* monster_template = spawn_def != NULL ? u2_find_monster_template(spawn_def->monster_template_id) : NULL;
+
+    if (monster_template != NULL) {
+        u2_entity_set_character_sheet(
+            entity,
+            monster_template->class_id,
+            monster_template->base_hp,
+            monster_template->base_mp,
+            monster_template->base_damage,
+            monster_template->armor_class,
+            monster_template->strength,
+            monster_template->dexterity,
+            monster_template->mind,
+            monster_template->physical,
+            monster_template->subterfuge,
+            monster_template->knowledge,
+            monster_template->communication
+        );
+        return;
+    }
+
+    if (spawn_def != NULL) {
+        const U2ClassTemplate* class_template = u2_find_class_template(spawn_def->class_id);
+        if (class_template != NULL) {
+            u2_entity_set_character_sheet(
+                entity,
+                class_template->class_id,
+                class_template->base_hp,
+                class_template->base_mp,
+                class_template->base_damage,
+                class_template->armor_class,
+                class_template->strength,
+                class_template->dexterity,
+                class_template->mind,
+                class_template->physical,
+                class_template->subterfuge,
+                class_template->knowledge,
+                class_template->communication
+            );
+            return;
+        }
+    }
+
+    memset(&entity->sheet, 0, sizeof(entity->sheet));
+    entity->sheet.class = CLASS_NONE;
+}
+
+static void u2_spawn_scene_entity_from_def(const U2SpawnDef* spawn_def) {
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        U2Entity* entity = &game_state.session.scene_entities[i];
+        if (!entity->active) {
+            u2_entity_init(entity, spawn_def->id, spawn_def->name, spawn_def->kind, spawn_def->tile_name, spawn_def->tile_x, spawn_def->tile_y);
+            entity->solid = spawn_def->solid;
+            entity->hostile = spawn_def->hostile;
+            entity->roaming = spawn_def->roaming;
+            entity->roam_radius = spawn_def->roam_radius;
+            entity->interaction_kind = spawn_def->interaction_kind;
+            entity->dialogue_id = spawn_def->dialogue_id;
+            u2_assign_spawn_sheet(entity, spawn_def);
+            return;
+        }
+    }
+}
+
+static void u2_rebuild_scene_entities(void) {
+    u2_scene_clear_entities();
+
+    if (game_state.session.current_map == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < u2_spawn_defs_count; ++i) {
+        if (strcmp(u2_spawn_defs[i].map_id, game_state.session.current_map->id) == 0) {
+            u2_spawn_scene_entity_from_def(&u2_spawn_defs[i]);
+        }
+    }
+}
+
+static void u2_set_player_position(int tile_x, int tile_y) {
+    game_state.session.player.tile_x = tile_x;
+    game_state.session.player.tile_y = tile_y;
+
+    if (game_state.session.current_map != NULL) {
+        if (u2_scene_is_looped()) {
+            game_state.session.player.tile_x = u2_entity_wrap_coord(game_state.session.player.tile_x, game_state.session.current_map->width);
+            game_state.session.player.tile_y = u2_entity_wrap_coord(game_state.session.player.tile_y, game_state.session.current_map->height);
+        } else {
+            game_state.session.player.tile_x = clamp(game_state.session.player.tile_x, 0, game_state.session.current_map->width - 1);
+            game_state.session.player.tile_y = clamp(game_state.session.player.tile_y, 0, game_state.session.current_map->height - 1);
+        }
+    }
+}
+
+static void u2_get_player_camera_target(float* out_x, float* out_y) {
+    if (!u2_entity_is_valid(&game_state.session.player) || game_state.session.current_map == NULL) {
+        *out_x = 0.0f;
+        *out_y = 0.0f;
+        return;
+    }
+
+    *out_x = (game_state.session.player.tile_x * U2_TILE_SIZE) - (u2_world_view_width() / 2.0f) + (U2_TILE_SIZE / 2.0f);
+    *out_y = (game_state.session.player.tile_y * U2_TILE_SIZE) - (u2_world_view_height() / 2.0f) + (U2_TILE_SIZE / 2.0f);
+
+    if (u2_scene_is_looped()) {
+        *out_x = u2_wrapf(*out_x, (float)u2_current_map_pixel_width());
+        *out_y = u2_wrapf(*out_y, (float)u2_current_map_pixel_height());
+    } else {
+        *out_x = clamp(*out_x, 0.0f, max(0.0f, (float)(u2_current_map_pixel_width() - u2_world_view_width())));
+        *out_y = clamp(*out_y, 0.0f, max(0.0f, (float)(u2_current_map_pixel_height() - u2_world_view_height())));
+    }
+}
+
+static void u2_snap_camera_to_player(void) {
+    float target_x = 0.0f;
+    float target_y = 0.0f;
+    u2_get_player_camera_target(&target_x, &target_y);
+    game_state.camera_x = target_x;
+    game_state.camera_y = target_y;
+}
+
+static void u2_update_camera(float dt) {
+    float target_x = 0.0f;
+    float target_y = 0.0f;
+    const float alpha = 1.0f - expf(-U2_CAMERA_SMOOTHNESS * dt);
+
+    u2_get_player_camera_target(&target_x, &target_y);
+
+    if (u2_scene_is_looped()) {
+        game_state.camera_x += u2_wrap_deltaf(game_state.camera_x, target_x, (float)u2_current_map_pixel_width()) * alpha;
+        game_state.camera_y += u2_wrap_deltaf(game_state.camera_y, target_y, (float)u2_current_map_pixel_height()) * alpha;
+        game_state.camera_x = u2_wrapf(game_state.camera_x, (float)u2_current_map_pixel_width());
+        game_state.camera_y = u2_wrapf(game_state.camera_y, (float)u2_current_map_pixel_height());
+    } else {
+        game_state.camera_x += (target_x - game_state.camera_x) * alpha;
+        game_state.camera_y += (target_y - game_state.camera_y) * alpha;
+        game_state.camera_x = clamp(game_state.camera_x, 0.0f, max(0.0f, (float)(u2_current_map_pixel_width() - u2_world_view_width())));
+        game_state.camera_y = clamp(game_state.camera_y, 0.0f, max(0.0f, (float)(u2_current_map_pixel_height() - u2_world_view_height())));
+    }
+}
+
+static void u2_load_scene(const char* map_id, int player_x, int player_y) {
+    const U2MapDef* map = u2_find_map(map_id);
+    if (map == NULL) {
+        return;
+    }
+
+    game_state.session.current_map = map;
+    game_state.session.scene_type = map->looped ? U2_SCENE_OVERWORLD : U2_SCENE_INTERIOR;
+    u2_close_service_panel();
+    u2_set_player_position(player_x, player_y);
+    u2_rebuild_scene_entities();
+    u2_snap_camera_to_player();
+}
+
+static void u2_equip_item_if_present(Character* sheet, Slot slot, const char* item_id) {
+    if (item_id != NULL) {
+        sheet->equipment[slot] = items_get(item_id);
+    }
+}
+
+static void u2_restore_player_hp(void) {
+    game_state.session.player.sheet.hp = d20_get_max_hp(&game_state.session.player.sheet);
+}
+
+static void u2_restore_player_mp(void) {
+    game_state.session.player.sheet.mp = d20_get_max_mp(&game_state.session.player.sheet);
+}
+
+static void u2_restore_player_fully(void) {
+    u2_restore_player_hp();
+    u2_restore_player_mp();
+}
+
+static void u2_update_food_for_step(void) {
+    game_state.session.food_depletion_step_counter++;
+    if (game_state.session.food_depletion_step_counter >= U2_STEPS_PER_FOOD_DEPLETION) {
+        game_state.session.food_depletion_step_counter = 0;
+        if (game_state.session.food > 0) {
+            game_state.session.food--;
+        }
+    }
+
+    game_state.session.food_regen_step_counter++;
+    if (game_state.session.food_regen_step_counter < U2_STEPS_PER_FOOD_REGEN) {
+        return;
+    }
+
+    game_state.session.food_regen_step_counter = 0;
+
+    if (game_state.session.food > 0 &&
+        game_state.session.player.sheet.hp < d20_get_max_hp(&game_state.session.player.sheet)) {
+        game_state.session.player.sheet.hp++;
+    }
+}
+
+static void u2_configure_player_from_template(const U2ClassTemplate* class_template) {
+    u2_entity_init(
+        &game_state.session.player,
+        "player",
+        game_state.session.player_name,
+        U2_ENTITY_KIND_PLAYER,
+        class_template->player_tile_name,
+        16,
+        17
+    );
+    game_state.session.player.solid = true;
+
+    u2_entity_set_character_sheet(
+        &game_state.session.player,
+        class_template->class_id,
+        class_template->base_hp,
+        class_template->base_mp,
+        class_template->base_damage,
+        class_template->armor_class,
+        class_template->strength,
+        class_template->dexterity,
+        class_template->mind,
+        class_template->physical,
+        class_template->subterfuge,
+        class_template->knowledge,
+        class_template->communication
+    );
+
+    memset(game_state.session.player.sheet.equipment, 0, sizeof(game_state.session.player.sheet.equipment));
+    u2_equip_item_if_present(&game_state.session.player.sheet, SLOT_HAND_RIGHT, class_template->starter_weapon_id);
+    u2_equip_item_if_present(&game_state.session.player.sheet, SLOT_BODY, class_template->starter_armor_id);
+    u2_equip_item_if_present(&game_state.session.player.sheet, SLOT_HAND_LEFT, class_template->starter_offhand_id);
+
+    u2_inventory_clear(&game_state.session.inventory);
+    for (int i = 0; i < U2_MAX_STARTER_ITEMS; ++i) {
+        if (class_template->starter_item_ids[i] != NULL && class_template->starter_item_amounts[i] > 0) {
+            u2_inventory_add_by_id(
+                &game_state.session.inventory,
+                class_template->starter_item_ids[i],
+                (size_t)class_template->starter_item_amounts[i]
+            );
+        }
+    }
+
+    game_state.session.gold = class_template->starter_gold;
+    game_state.session.food = class_template->starter_food;
+    game_state.session.chosen_class = class_template->class_id;
+}
+
+static void u2_start_new_game(const U2ClassTemplate* class_template) {
+    u2_session_init(&game_state.session);
+    game_state.session.started = true;
+    game_state.session.flow_state = U2_FLOW_PLAYING;
+    u2_configure_player_from_template(class_template);
+    u2_load_scene("bc1423", 34, 31);
+    u2_session_show_message(
+        &game_state.session,
+        false,
+        U2_LOG_MESSAGE_DURATION,
+        "Welcome, %s %s. Walk onto towns, castles, and villages to enter them.",
+        game_state.session.player_name,
+        class_template->name
+    );
+}
+
+static U2Entity* u2_find_scene_entity_at(int tile_x, int tile_y) {
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        U2Entity* entity = &game_state.session.scene_entities[i];
+        if (u2_entity_is_valid(entity) && entity->tile_x == tile_x && entity->tile_y == tile_y) {
+            return entity;
+        }
+    }
+    return NULL;
+}
+
+static U2Entity* u2_find_scene_entity_at_excluding(int tile_x, int tile_y, const U2Entity* excluded_entity) {
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        U2Entity* entity = &game_state.session.scene_entities[i];
+        if (entity == excluded_entity) {
+            continue;
+        }
+        if (u2_entity_is_valid(entity) && entity->tile_x == tile_x && entity->tile_y == tile_y) {
+            return entity;
+        }
+    }
+    return NULL;
+}
+
+static U2Entity* u2_find_scene_entity_by_id(const char* id) {
+    if (id == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        U2Entity* entity = &game_state.session.scene_entities[i];
+        if (u2_entity_is_valid(entity) && entity->id != NULL && strcmp(entity->id, id) == 0) {
+            return entity;
+        }
+    }
+
+    return NULL;
+}
+
+static bool u2_is_hostile_entity(const U2Entity* entity) {
+    return u2_entity_is_valid(entity) && (entity->hostile || entity->kind == U2_ENTITY_KIND_MONSTER);
+}
+
+static int u2_get_axis_delta_toward_target(int from, int to, int size, bool looped) {
+    int delta = to - from;
+
+    if (looped && size > 0) {
+        if (delta > size / 2) {
+            delta -= size;
+        } else if (delta < -(size / 2)) {
+            delta += size;
+        }
+    }
+
+    return delta;
+}
+
+static bool u2_is_monster_walkable_tile(const U2TileDef* tile) {
+    if (tile == NULL || !tile->passable) {
+        return false;
+    }
+
+    return strcmp(tile->name, "town") != 0 &&
+        strcmp(tile->name, "castle") != 0 &&
+        strcmp(tile->name, "village") != 0 &&
+        strcmp(tile->name, "portal") != 0 &&
+        strcmp(tile->name, "dungeon") != 0 &&
+        strcmp(tile->name, "tower") != 0 &&
+        strcmp(tile->name, "signpost") != 0;
+}
+
+static bool u2_is_within_entity_roam_radius(const U2Entity* entity, int target_x, int target_y) {
+    int delta_x = 0;
+    int delta_y = 0;
+
+    if (entity == NULL || !entity->roaming || entity->roam_radius <= 0 || game_state.session.current_map == NULL) {
+        return true;
+    }
+
+    delta_x = u2_get_axis_delta_toward_target(
+        entity->spawn_tile_x,
+        target_x,
+        game_state.session.current_map->width,
+        u2_scene_is_looped()
+    );
+    delta_y = u2_get_axis_delta_toward_target(
+        entity->spawn_tile_y,
+        target_y,
+        game_state.session.current_map->height,
+        u2_scene_is_looped()
+    );
+
+    return abs(delta_x) <= entity->roam_radius && abs(delta_y) <= entity->roam_radius;
+}
+
+static void u2_trigger_hostile_encounter(const U2Entity* entity) {
+    if (!u2_is_hostile_entity(entity) || game_state.session.encounter_message_cooldown > 0.0f) {
+        return;
+    }
+
+    game_state.session.encounter_message_cooldown = U2_ENCOUNTER_MESSAGE_COOLDOWN;
+    u2_session_show_message(
+        &game_state.session,
+        false,
+        U2_LOG_MESSAGE_DURATION,
+        "%s lunges at you. Combat is next, so for now it just blocks your path.",
+        entity->name
+    );
+}
+
+static bool u2_try_move_hostile_entity(U2Entity* entity, int dx, int dy) {
+    int target_x = 0;
+    int target_y = 0;
+    const U2TileDef* target_tile = NULL;
+    U2Entity* blocking_entity = NULL;
+
+    if (!u2_is_hostile_entity(entity) || game_state.session.current_map == NULL || (dx == 0 && dy == 0)) {
+        return false;
+    }
+
+    target_x = entity->tile_x + dx;
+    target_y = entity->tile_y + dy;
+
+    if (u2_scene_is_looped()) {
+        target_x = u2_entity_wrap_coord(target_x, game_state.session.current_map->width);
+        target_y = u2_entity_wrap_coord(target_y, game_state.session.current_map->height);
+    } else if (target_x < 0 || target_y < 0 || target_x >= game_state.session.current_map->width || target_y >= game_state.session.current_map->height) {
+        return false;
+    }
+
+    target_tile = u2_get_tile_at(game_state.session.current_map, target_x, target_y);
+    if (!u2_is_monster_walkable_tile(target_tile) || !u2_is_within_entity_roam_radius(entity, target_x, target_y)) {
+        return false;
+    }
+
+    if (game_state.session.player.tile_x == target_x && game_state.session.player.tile_y == target_y) {
+        if (dx < 0) entity->facing = U2_FACING_WEST;
+        if (dx > 0) entity->facing = U2_FACING_EAST;
+        if (dy < 0) entity->facing = U2_FACING_NORTH;
+        if (dy > 0) entity->facing = U2_FACING_SOUTH;
+        u2_trigger_hostile_encounter(entity);
+        return true;
+    }
+
+    blocking_entity = u2_find_scene_entity_at_excluding(target_x, target_y, entity);
+    if (blocking_entity != NULL && blocking_entity->solid) {
+        return false;
+    }
+
+    u2_entity_move_by(entity, game_state.session.current_map, dx, dy);
+    return true;
+}
+
+static void u2_update_hostile_entity(U2Entity* entity) {
+    static const int directions[4][2] = {
+        { -1, 0 },
+        { 1, 0 },
+        { 0, -1 },
+        { 0, 1 },
+    };
+    int delta_x = 0;
+    int delta_y = 0;
+    int primary_dx = 0;
+    int primary_dy = 0;
+    int secondary_dx = 0;
+    int secondary_dy = 0;
+    const bool looped = u2_scene_is_looped();
+    int random_start = 0;
+
+    if (!u2_is_hostile_entity(entity) || !entity->roaming || game_state.session.current_map == NULL) {
+        return;
+    }
+
+    delta_x = u2_get_axis_delta_toward_target(
+        entity->tile_x,
+        game_state.session.player.tile_x,
+        game_state.session.current_map->width,
+        looped
+    );
+    delta_y = u2_get_axis_delta_toward_target(
+        entity->tile_y,
+        game_state.session.player.tile_y,
+        game_state.session.current_map->height,
+        looped
+    );
+
+    if (abs(delta_x) + abs(delta_y) <= U2_MONSTER_CHASE_RADIUS) {
+        if (abs(delta_x) >= abs(delta_y)) {
+            primary_dx = sign(int, delta_x);
+            secondary_dy = sign(int, delta_y);
+        } else {
+            primary_dy = sign(int, delta_y);
+            secondary_dx = sign(int, delta_x);
+        }
+
+        if (u2_try_move_hostile_entity(entity, primary_dx, primary_dy)) {
+            return;
+        }
+
+        if (u2_try_move_hostile_entity(entity, secondary_dx, secondary_dy)) {
+            return;
+        }
+    } else if (!coin_flip(60)) {
+        return;
+    }
+
+    random_start = randi_range(0, 3);
+    for (int i = 0; i < 4; ++i) {
+        const int index = (random_start + i) % 4;
+        if (u2_try_move_hostile_entity(entity, directions[index][0], directions[index][1])) {
+            return;
+        }
+    }
+}
+
+static void u2_update_hostile_encounter_cooldown(float dt) {
+    if (game_state.session.encounter_message_cooldown > 0.0f) {
+        game_state.session.encounter_message_cooldown = max(0.0f, game_state.session.encounter_message_cooldown - dt);
+    }
+}
+
+static void u2_take_hostile_turn(void) {
+    if (!u2_scene_is_looped()) {
+        return;
+    }
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        u2_update_hostile_entity(&game_state.session.scene_entities[i]);
+    }
+}
+
+static int u2_get_service_option_count(const U2ServiceDef* service) {
+    if (service == NULL) {
+        return 0;
+    }
+
+    switch (service->kind) {
+        case U2_SERVICE_SHOP:
+            return u2_get_shop_stock_count(service->entity_id) + 1;
+        case U2_SERVICE_INN:
+            return 2;
+        case U2_SERVICE_HEALER:
+            return 3;
+        case U2_SERVICE_SANCTUARY:
+            return 4;
+        case U2_SERVICE_NONE:
+        default:
+            return 1;
+    }
+}
+
+static void u2_try_buy_shop_stock(const U2ShopStockDef* stock) {
+    Item* item = NULL;
+    const char* label = NULL;
+
+    if (stock == NULL) {
+        return;
+    }
+
+    label = stock->label;
+    if (label == NULL && stock->item_id != NULL) {
+        item = items_get(stock->item_id);
+        if (item != NULL) {
+            label = item->name;
+        }
+    }
+
+    if (label == NULL) {
+        label = "goods";
+    }
+
+    if (game_state.session.gold < stock->price) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You need %d gold for %s.", stock->price, label);
+        return;
+    }
+
+    if (stock->item_id != NULL) {
+        if (item == NULL) {
+            item = items_get(stock->item_id);
+        }
+        if (item == NULL) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "That stock entry is missing.");
+            return;
+        }
+        if (!u2_inventory_add(&game_state.session.inventory, item, 1)) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your pack is too full for %s.", label);
+            return;
+        }
+    }
+
+    game_state.session.gold -= stock->price;
+    if (stock->food_value > 0) {
+        game_state.session.food += stock->food_value;
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Purchased %s. Food +%d.", label, stock->food_value);
+    } else {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Purchased %s.", label);
+    }
+}
+
+static void u2_execute_service_action(void) {
+    const U2ServiceDef* service = u2_get_active_service_def();
+    Character* player = &game_state.session.player.sheet;
+
+    if (service == NULL) {
+        u2_close_service_panel();
+        return;
+    }
+
+    switch (service->kind) {
+        case U2_SERVICE_SHOP:
+        {
+            const int stock_count = u2_get_shop_stock_count(service->entity_id);
+            if (game_state.session.service_selection_index >= stock_count) {
+                u2_close_service_panel();
+                return;
+            }
+            u2_try_buy_shop_stock(u2_get_shop_stock_by_index(service->entity_id, game_state.session.service_selection_index));
+            return;
+        }
+        case U2_SERVICE_INN:
+            if (game_state.session.service_selection_index == 1) {
+                u2_close_service_panel();
+                return;
+            }
+            if (game_state.session.gold < service->primary_cost) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "The innkeeper asks for %d gold.", service->primary_cost);
+                return;
+            }
+            if (player->hp == d20_get_max_hp(player) && player->mp == d20_get_max_mp(player)) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You already feel well rested.");
+                return;
+            }
+            game_state.session.gold -= service->primary_cost;
+            u2_restore_player_fully();
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You rest soundly and recover fully.");
+            return;
+        case U2_SERVICE_HEALER:
+            if (game_state.session.service_selection_index == 2) {
+                u2_close_service_panel();
+                return;
+            }
+            if (game_state.session.service_selection_index == 0) {
+                if (game_state.session.gold < service->primary_cost) {
+                    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "The healer asks for %d gold.", service->primary_cost);
+                    return;
+                }
+                if (player->hp == d20_get_max_hp(player)) {
+                    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your wounds are already mended.");
+                    return;
+                }
+                game_state.session.gold -= service->primary_cost;
+                u2_restore_player_hp();
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your wounds are treated.");
+                return;
+            }
+            if (game_state.session.gold < service->secondary_cost) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "The healer asks for %d gold.", service->secondary_cost);
+                return;
+            }
+            if (player->mp == d20_get_max_mp(player)) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your spirit is already steady.");
+                return;
+            }
+            game_state.session.gold -= service->secondary_cost;
+            u2_restore_player_mp();
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your mind feels clear again.");
+            return;
+        case U2_SERVICE_SANCTUARY:
+            if (game_state.session.service_selection_index == 3) {
+                u2_close_service_panel();
+                return;
+            }
+            if (game_state.session.service_selection_index == 0) {
+                if (game_state.session.gold < service->primary_cost) {
+                    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Royal hospitality costs %d gold today.", service->primary_cost);
+                    return;
+                }
+                if (player->hp == d20_get_max_hp(player) && player->mp == d20_get_max_mp(player)) {
+                    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You are already at full strength.");
+                    return;
+                }
+                game_state.session.gold -= service->primary_cost;
+                u2_restore_player_fully();
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You leave the sanctuary restored.");
+                return;
+            }
+            if (game_state.session.service_selection_index == 1) {
+                if (game_state.session.gold < service->secondary_cost) {
+                    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "A royal physician asks for %d gold.", service->secondary_cost);
+                    return;
+                }
+                if (player->hp == d20_get_max_hp(player)) {
+                    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You do not need healing.");
+                    return;
+                }
+                game_state.session.gold -= service->secondary_cost;
+                u2_restore_player_hp();
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your wounds are seen to.");
+                return;
+            }
+            if (game_state.session.gold < service->tertiary_cost) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "The sanctuary tithe is %d gold.", service->tertiary_cost);
+                return;
+            }
+            if (player->mp == d20_get_max_mp(player)) {
+                u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your spirit is already renewed.");
+                return;
+            }
+            game_state.session.gold -= service->tertiary_cost;
+            u2_restore_player_mp();
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Your spirit is renewed.");
+            return;
+        case U2_SERVICE_NONE:
+        default:
+            u2_close_service_panel();
+            return;
+    }
+}
+
+static void u2_interact_with_entity(const U2Entity* entity) {
+    const U2ServiceDef* service = u2_find_service_def(entity->id);
+    const U2DialogueDef* dialogue = u2_find_dialogue(entity->dialogue_id);
+
+    if (u2_is_hostile_entity(entity)) {
+        u2_trigger_hostile_encounter(entity);
+        return;
+    }
+
+    if (service != NULL) {
+        u2_open_service_panel(entity);
+        return;
+    }
+
+    if (dialogue != NULL) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", dialogue->text);
+        return;
+    }
+
+    if (entity->interaction_kind == U2_INTERACTION_SIGN) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "The sign offers nothing useful.");
+    } else {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s has nothing to say.", entity->name);
+    }
+}
+
+static bool u2_try_interact_forward(void) {
+    int dx = 0;
+    int dy = 0;
+    int target_x = 0;
+    int target_y = 0;
+    U2Entity* entity = NULL;
+    const U2TileDef* front_tile = NULL;
+
+    u2_get_facing_delta(game_state.session.player.facing, &dx, &dy);
+    if (dx == 0 && dy == 0 || game_state.session.current_map == NULL) {
+        return false;
+    }
+
+    if (!u2_get_offset_tile(game_state.session.player.tile_x, game_state.session.player.tile_y, dx, dy, 1, &target_x, &target_y)) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Nothing there responds.");
+        return false;
+    }
+
+    entity = u2_find_scene_entity_at(target_x, target_y);
+    if (entity != NULL && (entity->interaction_kind != U2_INTERACTION_NONE || u2_is_hostile_entity(entity))) {
+        u2_interact_with_entity(entity);
+        return true;
+    }
+
+    front_tile = u2_get_tile_at(game_state.session.current_map, target_x, target_y);
+    if (u2_is_counter_tile(front_tile)) {
+        int beyond_x = 0;
+        int beyond_y = 0;
+
+        if (u2_get_offset_tile(game_state.session.player.tile_x, game_state.session.player.tile_y, dx, dy, 2, &beyond_x, &beyond_y)) {
+            entity = u2_find_scene_entity_at(beyond_x, beyond_y);
+            if (entity != NULL && (entity->interaction_kind != U2_INTERACTION_NONE || u2_is_hostile_entity(entity))) {
+                u2_interact_with_entity(entity);
+                return true;
+            }
+        }
+    }
+
+    if (front_tile != NULL) {
+        const char* placeholder_message = u2_get_unimplemented_message(front_tile);
+        if (placeholder_message != NULL) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", placeholder_message);
+            return true;
+        }
+    }
+
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Nothing there responds.");
+    return false;
+}
+
+static bool u2_get_entity_screen_position(const U2Entity* entity, int* out_x, int* out_y) {
+    if (!u2_entity_is_valid(entity) || game_state.session.current_map == NULL) {
+        return false;
+    }
+
+    const int camera_px_x = (int)floorf(game_state.camera_x);
+    const int camera_px_y = (int)floorf(game_state.camera_y);
+    int screen_x = (entity->tile_x * U2_TILE_SIZE) - camera_px_x;
+    int screen_y = (entity->tile_y * U2_TILE_SIZE) - camera_px_y;
+
+    if (u2_scene_is_looped()) {
+        while (screen_x < -U2_TILE_SIZE) {
+            screen_x += u2_current_map_pixel_width();
+        }
+        while (screen_x >= u2_world_view_width()) {
+            screen_x -= u2_current_map_pixel_width();
+        }
+        while (screen_y < -U2_TILE_SIZE) {
+            screen_y += u2_current_map_pixel_height();
+        }
+        while (screen_y >= u2_world_view_height()) {
+            screen_y -= u2_current_map_pixel_height();
+        }
+    }
+
+    if (screen_x <= -U2_TILE_SIZE || screen_x >= u2_world_view_width() || screen_y <= -U2_TILE_SIZE || screen_y >= u2_world_view_height()) {
+        return false;
+    }
+
+    *out_x = screen_x;
+    *out_y = screen_y;
+    return true;
+}
+
+static void u2_draw_world(void) {
+    if (game_state.session.current_map == NULL) {
+        return;
+    }
+
+    const int camera_px_x = (int)floorf(game_state.camera_x);
+    const int camera_px_y = (int)floorf(game_state.camera_y);
+    const int start_tile_x = camera_px_x / U2_TILE_SIZE;
+    const int start_tile_y = camera_px_y / U2_TILE_SIZE;
+    const int tile_offset_x = -(camera_px_x % U2_TILE_SIZE);
+    const int tile_offset_y = -(camera_px_y % U2_TILE_SIZE);
+    const int visible_tiles_x = (u2_world_view_width() / U2_TILE_SIZE) + 2;
+    const int visible_tiles_y = (u2_world_view_height() / U2_TILE_SIZE) + 2;
+
+    for (int y = 0; y < visible_tiles_y; ++y) {
+        int map_y = start_tile_y + y;
+        if (u2_scene_is_looped()) {
+            map_y = u2_entity_wrap_coord(map_y, game_state.session.current_map->height);
+        } else if (map_y < 0 || map_y >= game_state.session.current_map->height) {
+            continue;
+        }
+
+        const char* row = game_state.session.current_map->rows[map_y];
+        const int draw_y = tile_offset_y + (y * U2_TILE_SIZE);
+
+        for (int x = 0; x < visible_tiles_x; ++x) {
+            int map_x = start_tile_x + x;
+            if (u2_scene_is_looped()) {
+                map_x = u2_entity_wrap_coord(map_x, game_state.session.current_map->width);
+            } else if (map_x < 0 || map_x >= game_state.session.current_map->width) {
+                continue;
+            }
+
+            const unsigned char symbol = (unsigned char)row[map_x];
+            u2_draw_tile(game_state.tile_lookup[symbol], tile_offset_x + (x * U2_TILE_SIZE), draw_y);
+        }
+    }
+}
+
+static void u2_draw_scene_entities(void) {
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        U2Entity* entity = &game_state.session.scene_entities[i];
+        int draw_x = 0;
+        int draw_y = 0;
+
+        if (u2_get_entity_screen_position(entity, &draw_x, &draw_y)) {
+            u2_draw_tile(entity->tile, draw_x, draw_y);
+        }
+    }
+
+    {
+        int player_x = 0;
+        int player_y = 0;
+        if (u2_get_entity_screen_position(&game_state.session.player, &player_x, &player_y)) {
+            u2_draw_tile(game_state.session.player.tile, player_x, player_y);
+        }
+    }
+}
+
+static void u2_draw_hud(void) {
+    const int x = u2_world_view_width() + 4;
+    const int y = 4;
+    const int w = U2_HUD_WIDTH - 8;
+    const int h = screen_size.y - 8;
+    const U2ClassTemplate* class_template = u2_find_class_template(game_state.session.chosen_class);
+
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "STATUS");
+    ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "%s", game_state.session.player_name);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 36, COLOR_LIGHTGRAY, "%s", class_template != NULL ? class_template->name : "None");
+    ascii_font_draw(chao_canvas, font, x + 10, y + 52, COLOR_WHITE, "HP %d/%d", game_state.session.player.sheet.hp, d20_get_max_hp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 64, COLOR_WHITE, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 80, COLOR_WHITE, "G %d", game_state.session.gold);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 92, u2_get_food_color(), "F %d", game_state.session.food);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 108, COLOR_LIGHTGRAY, "STR %d", game_state.session.player.sheet.stats[STAT_STR]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 120, COLOR_LIGHTGRAY, "DEX %d", game_state.session.player.sheet.stats[STAT_DEX]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 132, COLOR_LIGHTGRAY, "MND %d", game_state.session.player.sheet.stats[STAT_MIND]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 148, COLOR_WHITE, "Area:");
+    if (game_state.session.current_map != NULL) {
+        u2_draw_wrapped_text(x + 10, y + 160, w - 20, COLOR_LIGHTGRAY, game_state.session.current_map->name);
+    }
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 40, COLOR_YELLOW, "F5 Save");
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 28, COLOR_YELLOW, "F9 Load");
+    ascii_font_draw(chao_canvas, font, x + 10, y + h - 16, COLOR_YELLOW, "C/I Info");
+}
+
+static void u2_draw_message_log(void) {
+    if (!game_state.session.message.visible || game_state.session.message.text[0] == '\0') {
+        return;
+    }
+
+    if (game_state.session.message.modal) {
+        const int w = 220;
+        const int text_width = w - 20;
+        const Vector2Int text_size = u2_get_wrapped_text_size(text_width, game_state.session.message.text);
+        const int h = max(80, text_size.y + 34);
+        const int x = (screen_size.x - w) / 2;
+        const int y = (screen_size.y - h) / 2;
+        char visible_text[U2_MESSAGE_TEXT_MAX];
+        u2_get_revealed_wrapped_message_text(text_width, visible_text, sizeof(visible_text));
+        u2_draw_panel(x, y, w, h);
+        ascii_font_draw(chao_canvas, font, x + 10, y + 12, COLOR_WHITE, "%s", visible_text);
+        ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Enter closes");
+        return;
+    }
+
+    {
+        const int x = 4;
+        const int w = u2_world_view_width() - 8;
+        const int text_width = w - 20;
+        const Vector2Int text_size = u2_get_wrapped_text_size(text_width, game_state.session.message.text);
+        const int h = max(U2_LOG_HEIGHT, text_size.y + 20);
+        int player_screen_x = 0;
+        int player_screen_y = 0;
+        int y = screen_size.y - h - 4;
+        char visible_text[U2_MESSAGE_TEXT_MAX];
+
+        if (u2_get_entity_screen_position(&game_state.session.player, &player_screen_x, &player_screen_y)) {
+            const int player_center_y = player_screen_y + (U2_TILE_SIZE / 2);
+            if (player_center_y >= (u2_world_view_height() * 2) / 3) {
+                y = 4;
+            }
+        }
+
+        u2_get_revealed_wrapped_message_text(text_width, visible_text, sizeof(visible_text));
+        u2_draw_panel(x, y, w, h);
+        ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_WHITE, "%s", visible_text);
+    }
+}
+
+static void u2_draw_character_panel(void) {
+    char damage_text[64];
+    const int w = 210;
+    const int h = 140;
+    const int x = (screen_size.x - w) / 2;
+    const int y = (screen_size.y - h) / 2;
+    Character* player = &game_state.session.player.sheet;
+
+    d20_get_damage_string(player, SLOT_HAND_RIGHT, damage_text);
+
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "CHARACTER");
+    ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "%s", game_state.session.player_name);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 36, COLOR_LIGHTGRAY, "%s", u2_class_name(game_state.session.chosen_class));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 52, COLOR_WHITE, "HP %d/%d", player->hp, d20_get_max_hp(player));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 64, COLOR_WHITE, "MP %d/%d", player->mp, d20_get_max_mp(player));
+    ascii_font_draw(chao_canvas, font, x + 10, y + 80, COLOR_LIGHTGRAY, "STR %d  DEX %d  MND %d", player->stats[STAT_STR], player->stats[STAT_DEX], player->stats[STAT_MIND]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 92, COLOR_LIGHTGRAY, "PHY %d  SUB %d", player->skills[SKILL_PHYSICAL], player->skills[SKILL_SUBTERFUGE]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 104, COLOR_LIGHTGRAY, "KNO %d  COM %d", player->skills[SKILL_KNOWLEDGE], player->skills[SKILL_COMMUNICATION]);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 116, COLOR_WHITE, "AC %d  DMG %s", d20_get_armor_class(player), damage_text);
+}
+
+static void u2_draw_inventory_panel(void) {
+    const int w = 210;
+    const int h = 150;
+    const int x = (screen_size.x - w) / 2;
+    const int y = (screen_size.y - h) / 2;
+
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw(chao_canvas, font, x + 10, y + 10, COLOR_YELLOW, "INVENTORY");
+    ascii_font_draw(chao_canvas, font, x + 10, y + 24, COLOR_WHITE, "Gold %d  Food %d", game_state.session.gold, game_state.session.food);
+
+    if (game_state.session.inventory.count == 0) {
+        ascii_font_draw(chao_canvas, font, x + 10, y + 42, COLOR_LIGHTGRAY, "(empty)");
+        return;
+    }
+
+    for (int i = 0; i < game_state.session.inventory.count && i < 8; ++i) {
+        const ItemSlot* slot = &game_state.session.inventory.slots[i];
+        if (slot->item == NULL) {
+            continue;
+        }
+
+        if (slot->amount > 1) {
+            ascii_font_draw(chao_canvas, font, x + 10, y + 42 + i * 12, COLOR_LIGHTGRAY, "%dx %s", (int)slot->amount, slot->item->name);
+        } else {
+            ascii_font_draw(chao_canvas, font, x + 10, y + 42 + i * 12, COLOR_LIGHTGRAY, "%s", slot->item->name);
+        }
+    }
+}
+
+static void u2_draw_service_panel(void) {
+    const U2ServiceDef* service = u2_get_active_service_def();
+    const int w = 288;
+    const int h = 176;
+    const int x = (screen_size.x - w) / 2;
+    const int y = (screen_size.y - h) / 2;
+    const int list_x = x + 12;
+    const int list_y = y + 72;
+
+    if (service == NULL) {
+        return;
+    }
+
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw(chao_canvas, font, x + 12, y + 10, COLOR_YELLOW, "%s", service->title);
+    u2_draw_wrapped_text(x + 12, y + 24, w - 24, COLOR_LIGHTGRAY, service->description);
+    ascii_font_draw(chao_canvas, font, x + 12, y + 52, COLOR_WHITE, "Gold %d  Food %d", game_state.session.gold, game_state.session.food);
+    ascii_font_draw(chao_canvas, font, x + 148, y + 52, COLOR_WHITE, "HP %d/%d", game_state.session.player.sheet.hp, d20_get_max_hp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 148, y + 64, COLOR_WHITE, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
+
+    switch (service->kind) {
+        case U2_SERVICE_SHOP:
+        {
+            const int stock_count = u2_get_shop_stock_count(service->entity_id);
+            for (int i = 0; i < stock_count; ++i) {
+                const U2ShopStockDef* stock = u2_get_shop_stock_by_index(service->entity_id, i);
+                Item* item = stock != NULL && stock->item_id != NULL ? items_get(stock->item_id) : NULL;
+                const char* label = stock != NULL ? stock->label : NULL;
+                char line[96];
+
+                if (label == NULL && item != NULL) {
+                    label = item->name;
+                }
+                if (label == NULL) {
+                    label = "Stock";
+                }
+
+                snprintf(line, sizeof(line), "%s %s - %dg",
+                    i == game_state.session.service_selection_index ? ">" : " ",
+                    label,
+                    stock != NULL ? stock->price : 0);
+                ascii_font_draw(chao_canvas, font, list_x, list_y + i * 12,
+                    i == game_state.session.service_selection_index ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                    "%s", line);
+            }
+
+            ascii_font_draw(chao_canvas, font, list_x, list_y + stock_count * 12,
+                game_state.session.service_selection_index == stock_count ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Leave", game_state.session.service_selection_index == stock_count ? ">" : " ");
+            ascii_font_draw(chao_canvas, font, x + 12, y + h - 18, COLOR_YELLOW, "Up/Down selects  Enter buys  Esc leaves");
+            return;
+        }
+        case U2_SERVICE_INN:
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 0,
+                game_state.session.service_selection_index == 0 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Rest till dawn - %dg",
+                game_state.session.service_selection_index == 0 ? ">" : " ",
+                service->primary_cost);
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 12,
+                game_state.session.service_selection_index == 1 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Leave",
+                game_state.session.service_selection_index == 1 ? ">" : " ");
+            ascii_font_draw(chao_canvas, font, x + 12, y + h - 18, COLOR_YELLOW, "Enter confirms  Esc leaves");
+            return;
+        case U2_SERVICE_HEALER:
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 0,
+                game_state.session.service_selection_index == 0 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Heal wounds - %dg",
+                game_state.session.service_selection_index == 0 ? ">" : " ",
+                service->primary_cost);
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 12,
+                game_state.session.service_selection_index == 1 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Recover spirit - %dg",
+                game_state.session.service_selection_index == 1 ? ">" : " ",
+                service->secondary_cost);
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 24,
+                game_state.session.service_selection_index == 2 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Leave",
+                game_state.session.service_selection_index == 2 ? ">" : " ");
+            ascii_font_draw(chao_canvas, font, x + 12, y + h - 18, COLOR_YELLOW, "Enter confirms  Esc leaves");
+            return;
+        case U2_SERVICE_SANCTUARY:
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 0,
+                game_state.session.service_selection_index == 0 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Rest fully - %dg",
+                game_state.session.service_selection_index == 0 ? ">" : " ",
+                service->primary_cost);
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 12,
+                game_state.session.service_selection_index == 1 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Heal wounds - %dg",
+                game_state.session.service_selection_index == 1 ? ">" : " ",
+                service->secondary_cost);
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 24,
+                game_state.session.service_selection_index == 2 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Recover spirit - %dg",
+                game_state.session.service_selection_index == 2 ? ">" : " ",
+                service->tertiary_cost);
+            ascii_font_draw(chao_canvas, font, list_x, list_y + 36,
+                game_state.session.service_selection_index == 3 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+                "%s Leave",
+                game_state.session.service_selection_index == 3 ? ">" : " ");
+            ascii_font_draw(chao_canvas, font, x + 12, y + h - 18, COLOR_YELLOW, "Enter confirms  Esc leaves");
+            return;
+        case U2_SERVICE_NONE:
+        default:
+            ascii_font_draw(chao_canvas, font, list_x, list_y, COLOR_LIGHTGRAY, "No services available.");
+            ascii_font_draw(chao_canvas, font, x + 12, y + h - 18, COLOR_YELLOW, "Esc leaves");
+            return;
+    }
+}
+
+static bool u2_save_exists(void) {
+    FILE* file = fopen(U2_SAVE_FILE_PATH, "rb");
+    if (file == NULL) {
+        return false;
+    }
+
+    fclose(file);
+    return true;
+}
+
+static void u2_save_character(U2SavedCharacter* saved_character, const Character* character) {
+    if (saved_character == NULL || character == NULL) {
+        return;
+    }
+
+    memset(saved_character, 0, sizeof(*saved_character));
+    saved_character->class_id = character->class;
+    saved_character->base_hp = character->base_hp;
+    saved_character->base_mp = character->base_mp;
+    u2_copy_string(saved_character->base_damage, sizeof(saved_character->base_damage), character->base_damage);
+    saved_character->armor_class = character->armor_class;
+    saved_character->hp = character->hp;
+    saved_character->mp = character->mp;
+    memcpy(saved_character->stats, character->stats, sizeof(saved_character->stats));
+    memcpy(saved_character->skills, character->skills, sizeof(saved_character->skills));
+    saved_character->level = character->level;
+    saved_character->exp = character->exp;
+    saved_character->stat_points = character->stat_points;
+
+    for (int i = 0; i < SLOT_END; ++i) {
+        u2_copy_string(
+            saved_character->equipment_ids[i],
+            sizeof(saved_character->equipment_ids[i]),
+            character->equipment[i] != NULL ? character->equipment[i]->id : NULL
+        );
+    }
+}
+
+static void u2_restore_character(Character* character, const U2SavedCharacter* saved_character) {
+    if (character == NULL || saved_character == NULL) {
+        return;
+    }
+
+    character->class = (CharacterClass)saved_character->class_id;
+    character->base_hp = saved_character->base_hp;
+    character->base_mp = saved_character->base_mp;
+    character->armor_class = saved_character->armor_class;
+    character->hp = max(0, saved_character->hp);
+    character->mp = max(0, saved_character->mp);
+    memcpy(character->stats, saved_character->stats, sizeof(character->stats));
+    memcpy(character->skills, saved_character->skills, sizeof(character->skills));
+    character->level = max(1, saved_character->level);
+    character->exp = max(0, saved_character->exp);
+    character->stat_points = max(0, saved_character->stat_points);
+
+    memset(character->equipment, 0, sizeof(character->equipment));
+    for (int i = 0; i < SLOT_END; ++i) {
+        if (saved_character->equipment_ids[i][0] != '\0') {
+            character->equipment[i] = items_get(saved_character->equipment_ids[i]);
+        }
+    }
+}
+
+static void u2_fill_save_data(U2SaveData* save_data) {
+    if (save_data == NULL) {
+        return;
+    }
+
+    memset(save_data, 0, sizeof(*save_data));
+    memcpy(save_data->magic, "U2SV", U2_SAVE_MAGIC_SIZE);
+    save_data->version = U2_SAVE_VERSION;
+    u2_copy_string(save_data->player_name, sizeof(save_data->player_name), game_state.session.player_name);
+    save_data->chosen_class = game_state.session.chosen_class;
+    u2_copy_string(
+        save_data->current_map_id,
+        sizeof(save_data->current_map_id),
+        game_state.session.current_map != NULL ? game_state.session.current_map->id : NULL
+    );
+    save_data->player_tile_x = game_state.session.player.tile_x;
+    save_data->player_tile_y = game_state.session.player.tile_y;
+    save_data->player_facing = game_state.session.player.facing;
+    save_data->gold = game_state.session.gold;
+    save_data->food = game_state.session.food;
+    save_data->food_depletion_step_counter = game_state.session.food_depletion_step_counter;
+    save_data->food_regen_step_counter = game_state.session.food_regen_step_counter;
+    u2_save_character(&save_data->player, &game_state.session.player.sheet);
+
+    save_data->inventory_count = min(game_state.session.inventory.count, U2_MAX_INVENTORY_SLOTS);
+    for (int i = 0; i < save_data->inventory_count; ++i) {
+        const ItemSlot* slot = &game_state.session.inventory.slots[i];
+        if (slot->item == NULL) {
+            continue;
+        }
+
+        u2_copy_string(save_data->inventory[i].item_id, sizeof(save_data->inventory[i].item_id), slot->item->id);
+        save_data->inventory[i].amount = (int)slot->amount;
+    }
+
+    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        const U2Entity* entity = &game_state.session.scene_entities[i];
+        U2SavedSceneEntity* saved_entity = &save_data->scene_entities[save_data->scene_entity_count];
+
+        if (!u2_entity_is_valid(entity) || save_data->scene_entity_count >= U2_MAX_SCENE_ENTITIES) {
+            continue;
+        }
+
+        saved_entity->active = 1;
+        u2_copy_string(saved_entity->id, sizeof(saved_entity->id), entity->id);
+        saved_entity->tile_x = entity->tile_x;
+        saved_entity->tile_y = entity->tile_y;
+        saved_entity->facing = entity->facing;
+        saved_entity->hp = entity->sheet.hp;
+        saved_entity->mp = entity->sheet.mp;
+        save_data->scene_entity_count++;
+    }
+}
+
+static bool u2_write_save_data(const U2SaveData* save_data) {
+    FILE* file = NULL;
+    bool success = false;
+
+    if (save_data == NULL) {
+        return false;
+    }
+
+    file = fopen(U2_SAVE_FILE_PATH, "wb");
+    if (file == NULL) {
+        return false;
+    }
+
+    success = fwrite(save_data, sizeof(*save_data), 1, file) == 1;
+    fclose(file);
+    return success;
+}
+
+static bool u2_read_save_data(U2SaveData* save_data) {
+    FILE* file = NULL;
+    bool success = false;
+
+    if (save_data == NULL) {
+        return false;
+    }
+
+    file = fopen(U2_SAVE_FILE_PATH, "rb");
+    if (file == NULL) {
+        return false;
+    }
+
+    success = fread(save_data, sizeof(*save_data), 1, file) == 1;
+    fclose(file);
+
+    if (!success ||
+        memcmp(save_data->magic, "U2SV", U2_SAVE_MAGIC_SIZE) != 0 ||
+        save_data->version != U2_SAVE_VERSION) {
+        return false;
+    }
+
+    save_data->inventory_count = clamp(save_data->inventory_count, 0, U2_MAX_INVENTORY_SLOTS);
+    save_data->scene_entity_count = clamp(save_data->scene_entity_count, 0, U2_MAX_SCENE_ENTITIES);
+    return true;
+}
+
+static void u2_restore_inventory_from_save(const U2SaveData* save_data) {
+    if (save_data == NULL) {
+        return;
+    }
+
+    u2_inventory_clear(&game_state.session.inventory);
+    for (int i = 0; i < save_data->inventory_count; ++i) {
+        if (save_data->inventory[i].item_id[0] == '\0' || save_data->inventory[i].amount <= 0) {
+            continue;
+        }
+
+        u2_inventory_add_by_id(
+            &game_state.session.inventory,
+            save_data->inventory[i].item_id,
+            (size_t)save_data->inventory[i].amount
+        );
+    }
+}
+
+static void u2_apply_saved_scene_entities(const U2SaveData* save_data) {
+    if (save_data == NULL || game_state.session.current_map == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < save_data->scene_entity_count; ++i) {
+        const U2SavedSceneEntity* saved_entity = &save_data->scene_entities[i];
+        U2Entity* entity = NULL;
+
+        if (!saved_entity->active || saved_entity->id[0] == '\0') {
+            continue;
+        }
+
+        entity = u2_find_scene_entity_by_id(saved_entity->id);
+        if (entity == NULL) {
+            continue;
+        }
+
+        entity->tile_x = saved_entity->tile_x;
+        entity->tile_y = saved_entity->tile_y;
+        entity->facing = (U2Facing)clamp(saved_entity->facing, U2_FACING_SOUTH, U2_FACING_EAST);
+        entity->sheet.hp = max(0, saved_entity->hp);
+        entity->sheet.mp = max(0, saved_entity->mp);
+        u2_entity_clamp_to_map(entity, game_state.session.current_map);
+    }
+}
+
+static bool u2_try_save_game(void) {
+    U2SaveData save_data;
+
+    if (!game_state.session.started || game_state.session.current_map == NULL) {
+        return false;
+    }
+
+    u2_fill_save_data(&save_data);
+    return u2_write_save_data(&save_data);
+}
+
+static bool u2_try_load_game(void) {
+    U2SaveData save_data;
+    const U2ClassTemplate* class_template = NULL;
+
+    if (!u2_read_save_data(&save_data)) {
+        return false;
+    }
+
+    class_template = u2_find_class_template((CharacterClass)save_data.chosen_class);
+    if (class_template == NULL || u2_find_map(save_data.current_map_id) == NULL) {
+        return false;
+    }
+
+    u2_session_init(&game_state.session);
+    game_state.session.started = true;
+    game_state.session.flow_state = U2_FLOW_PLAYING;
+    u2_copy_string(game_state.session.player_name, sizeof(game_state.session.player_name), save_data.player_name);
+    u2_configure_player_from_template(class_template);
+    u2_restore_character(&game_state.session.player.sheet, &save_data.player);
+    game_state.session.gold = save_data.gold;
+    game_state.session.food = save_data.food;
+    game_state.session.food_depletion_step_counter = max(0, save_data.food_depletion_step_counter);
+    game_state.session.food_regen_step_counter = max(0, save_data.food_regen_step_counter);
+    u2_restore_inventory_from_save(&save_data);
+    u2_load_scene(save_data.current_map_id, save_data.player_tile_x, save_data.player_tile_y);
+    game_state.session.player.facing = (U2Facing)clamp(save_data.player_facing, U2_FACING_SOUTH, U2_FACING_EAST);
+    u2_apply_saved_scene_entities(&save_data);
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Loaded saved journey.");
+    return true;
+}
+
+static void u2_draw_title_screen(void) {
+    const int w = 236;
+    const int h = 136;
+    const int x = (screen_size.x - w) / 2;
+    const int y = 34;
+    const bool has_save = u2_save_exists();
+
+    fill(chao_canvas, COLOR_BLACK);
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 16, COLOR_YELLOW, TEXT_ALIGN_CENTER, -1, "ULTIMATUM II");
+    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 32, COLOR_LIGHTGRAY, TEXT_ALIGN_CENTER, -1, "Revenge of the Enchantress");
+    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 58, COLOR_WHITE, TEXT_ALIGN_CENTER, -1, "> New Game");
+    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 78, COLOR_LIGHTGRAY, TEXT_ALIGN_CENTER, -1, "Press Enter");
+    if (has_save) {
+        ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 94, COLOR_LIGHTGRAY, TEXT_ALIGN_CENTER, -1, "F9 Continue");
+    } else {
+        ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 94, COLOR_LIGHTGRAY, TEXT_ALIGN_CENTER, -1, "No saved journey yet");
+    }
+    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 110, COLOR_LIGHTGRAY, TEXT_ALIGN_CENTER, -1, "Microlite20 town slice");
+}
+
+static void u2_draw_class_select(void) {
+    const int w = 300;
+    const int h = 176;
+    const int x = (screen_size.x - w) / 2;
+    const int y = 22;
+    const U2ClassTemplate* selected_class = u2_get_class_template_by_index(game_state.session.class_selection_index);
+
+    fill(chao_canvas, COLOR_BLACK);
+    u2_draw_panel(x, y, w, h);
+    ascii_font_draw(chao_canvas, font, x + 12, y + 10, COLOR_YELLOW, "Choose Your Class");
+
+    for (int i = 0; i < (int)u2_class_templates_count; ++i) {
+        const U2ClassTemplate* class_template = &u2_class_templates[i];
+        ascii_font_draw(
+            chao_canvas,
+            font,
+            x + 14,
+            y + 28 + i * 12,
+            i == game_state.session.class_selection_index ? COLOR_WHITE : COLOR_LIGHTGRAY,
+            "%s %s",
+            i == game_state.session.class_selection_index ? ">" : " ",
+            class_template->name
+        );
+    }
+
+    if (selected_class != NULL) {
+        ascii_font_draw(chao_canvas, font, x + 122, y + 28, COLOR_WHITE, "%s", selected_class->name);
+        u2_draw_wrapped_text(x + 122, y + 40, 162, COLOR_LIGHTGRAY, selected_class->description);
+        ascii_font_draw(chao_canvas, font, x + 122, y + 78, COLOR_WHITE, "HP %d  MP %d", selected_class->base_hp, selected_class->base_mp);
+        ascii_font_draw(chao_canvas, font, x + 122, y + 90, COLOR_LIGHTGRAY, "STR %d  DEX %d", selected_class->strength, selected_class->dexterity);
+        ascii_font_draw(chao_canvas, font, x + 122, y + 102, COLOR_LIGHTGRAY, "MND %d", selected_class->mind);
+        ascii_font_draw(chao_canvas, font, x + 122, y + 114, COLOR_LIGHTGRAY, "Start %s", items_get(selected_class->starter_weapon_id)->name);
+        ascii_font_draw(chao_canvas, font, x + 122, y + 126, COLOR_LIGHTGRAY, "Gold %d  Food %d", selected_class->starter_gold, selected_class->starter_food);
+    }
+
+    ascii_font_draw(chao_canvas, font, x + 12, y + h - 20, COLOR_YELLOW, "Enter begins  Esc backs out");
+}
+
+static void u2_draw_gameplay(void) {
+    fill(chao_canvas, COLOR_BLACK);
+    chao_blend_mode = BLEND_NONE;
+
+    u2_draw_world();
+    u2_draw_scene_entities();
+    u2_draw_hud();
+    u2_draw_message_log();
+
+    if (game_state.session.panel == U2_PANEL_CHARACTER) {
+        u2_draw_character_panel();
+    } else if (game_state.session.panel == U2_PANEL_INVENTORY) {
+        u2_draw_inventory_panel();
+    } else if (game_state.session.panel == U2_PANEL_SERVICE) {
+        u2_draw_service_panel();
+    }
+}
+
+static void game_draw(void) {
+    switch (game_state.session.flow_state) {
+        case U2_FLOW_TITLE:
+            u2_draw_title_screen();
+            break;
+        case U2_FLOW_CLASS_SELECT:
+            u2_draw_class_select();
+            break;
+        case U2_FLOW_PLAYING:
+        default:
+            u2_draw_gameplay();
+            break;
+    }
+}
+
+static U2MoveDirection u2_get_requested_direction(void) {
+    if (input.just_pressed[KEY_LEFT]) return U2_MOVE_WEST;
+    if (input.just_pressed[KEY_RIGHT]) return U2_MOVE_EAST;
+    if (input.just_pressed[KEY_UP]) return U2_MOVE_NORTH;
+    if (input.just_pressed[KEY_DOWN]) return U2_MOVE_SOUTH;
+
+    if (input.pressed[KEY_LEFT]) return U2_MOVE_WEST;
+    if (input.pressed[KEY_RIGHT]) return U2_MOVE_EAST;
+    if (input.pressed[KEY_UP]) return U2_MOVE_NORTH;
+    if (input.pressed[KEY_DOWN]) return U2_MOVE_SOUTH;
+
+    return U2_MOVE_NONE;
+}
+
+static bool u2_is_sprint_pressed(void) {
+    return input.pressed[KEY_LSHIFT] || input.pressed[KEY_RSHIFT];
+}
+
+static void u2_try_move_player(U2MoveDirection direction) {
+    int dx = 0;
+    int dy = 0;
+    int target_x = game_state.session.player.tile_x;
+    int target_y = game_state.session.player.tile_y;
+    const U2TileDef* target_tile = NULL;
+    U2Entity* blocking_entity = NULL;
+
+    switch (direction) {
+        case U2_MOVE_WEST: dx = -1; game_state.session.player.facing = U2_FACING_WEST; break;
+        case U2_MOVE_EAST: dx = 1; game_state.session.player.facing = U2_FACING_EAST; break;
+        case U2_MOVE_NORTH: dy = -1; game_state.session.player.facing = U2_FACING_NORTH; break;
+        case U2_MOVE_SOUTH: dy = 1; game_state.session.player.facing = U2_FACING_SOUTH; break;
+        case U2_MOVE_NONE:
+        default:
+            return;
+    }
+
+    target_x += dx;
+    target_y += dy;
+
+    if (u2_scene_is_looped()) {
+        target_x = u2_entity_wrap_coord(target_x, game_state.session.current_map->width);
+        target_y = u2_entity_wrap_coord(target_y, game_state.session.current_map->height);
+    } else if (target_x < 0 || target_y < 0 || target_x >= game_state.session.current_map->width || target_y >= game_state.session.current_map->height) {
+        const U2TransitionDef* exit_transition = u2_find_first_transition_from_map(game_state.session.current_map->id);
+        if (exit_transition != NULL) {
+            u2_load_scene(exit_transition->destination_map_id, exit_transition->destination_x, exit_transition->destination_y);
+            u2_session_show_message(
+                &game_state.session,
+                false,
+                U2_LOG_MESSAGE_DURATION,
+                "Returned to %s.",
+                game_state.session.current_map->name
+            );
+            return;
+        }
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You cannot leave this location that way.");
+        return;
+    }
+
+    blocking_entity = u2_find_scene_entity_at(target_x, target_y);
+    if (blocking_entity != NULL && blocking_entity->solid) {
+        u2_interact_with_entity(blocking_entity);
+        return;
+    }
+
+    target_tile = u2_get_tile_at(game_state.session.current_map, target_x, target_y);
+    if (target_tile == NULL || !target_tile->passable) {
+        u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", u2_get_blocked_message(target_tile));
+        return;
+    }
+
+    {
+        const char* placeholder_message = u2_get_unimplemented_message(target_tile);
+        if (placeholder_message != NULL) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", placeholder_message);
+            return;
+        }
+    }
+
+    game_state.session.player.tile_x = target_x;
+    game_state.session.player.tile_y = target_y;
+    u2_update_food_for_step();
+
+    if (u2_scene_is_looped()) {
+        const U2TransitionDef* transition = u2_find_transition(game_state.session.current_map->id, target_x, target_y);
+        if (transition != NULL) {
+            u2_load_scene(transition->destination_map_id, transition->destination_x, transition->destination_y);
+            u2_session_show_message(
+                &game_state.session,
+                false,
+                U2_LOG_MESSAGE_DURATION,
+                "Entered %s.",
+                game_state.session.current_map->name
+            );
+            return;
+        }
+
+        u2_take_hostile_turn();
+    }
+}
+
+static void u2_update_message_timer(float dt) {
+    if (!game_state.session.message.visible) {
+        return;
+    }
+
+    {
+        const int total_chars = (int)strlen(game_state.session.message.text);
+        game_state.session.message.reveal_progress += dt * U2_MESSAGE_REVEAL_CHARS_PER_SECOND;
+        game_state.session.message.visible_chars = min(total_chars, (int)game_state.session.message.reveal_progress);
+    }
+
+    if (!game_state.session.message.modal && game_state.session.message.visible_chars >= (int)strlen(game_state.session.message.text) && game_state.session.message.timer > 0.0f) {
+        game_state.session.message.timer -= dt;
+        if (game_state.session.message.timer <= 0.0f) {
+            u2_session_clear_message(&game_state.session);
+        }
+    }
+}
+
+static void u2_update_title(void) {
+    if (input.just_pressed[KEY_F9]) {
+        u2_try_load_game();
+        return;
+    }
+
+    if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE] || input.just_pressed[KEY_N]) {
+        game_state.session.flow_state = U2_FLOW_CLASS_SELECT;
+        game_state.session.class_selection_index = 0;
+    }
+}
+
+static void u2_update_class_select(void) {
+    if (input.just_pressed[KEY_UP]) {
+        game_state.session.class_selection_index--;
+        if (game_state.session.class_selection_index < 0) {
+            game_state.session.class_selection_index = (int)u2_class_templates_count - 1;
+        }
+    }
+    if (input.just_pressed[KEY_DOWN]) {
+        game_state.session.class_selection_index++;
+        if (game_state.session.class_selection_index >= (int)u2_class_templates_count) {
+            game_state.session.class_selection_index = 0;
+        }
+    }
+    if (input.just_pressed[KEY_ESC]) {
+        game_state.session.flow_state = U2_FLOW_TITLE;
+    }
+    if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
+        const U2ClassTemplate* class_template = u2_get_class_template_by_index(game_state.session.class_selection_index);
+        if (class_template != NULL) {
+            u2_start_new_game(class_template);
+        }
+    }
+}
+
+static void u2_update_gameplay_ui(void) {
+    if (input.just_pressed[KEY_F5]) {
+        if (u2_try_save_game()) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Journey saved.");
+        } else {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Unable to save right now.");
+        }
+        return;
+    }
+
+    if (input.just_pressed[KEY_F9]) {
+        if (!u2_try_load_game()) {
+            u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "No valid save was found.");
+        }
+        return;
+    }
+
+    if (game_state.session.message.visible && game_state.session.message.modal) {
+        if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE] || input.just_pressed[KEY_ESC]) {
+            u2_session_clear_message(&game_state.session);
+        }
+        return;
+    }
+
+    if (game_state.session.panel == U2_PANEL_SERVICE) {
+        const U2ServiceDef* service = u2_get_active_service_def();
+        const int option_count = u2_get_service_option_count(service);
+
+        if (service == NULL || option_count <= 0) {
+            u2_close_service_panel();
+            return;
+        }
+
+        if (input.just_pressed[KEY_ESC]) {
+            u2_close_service_panel();
+            return;
+        }
+        if (input.just_pressed[KEY_UP]) {
+            game_state.session.service_selection_index--;
+            if (game_state.session.service_selection_index < 0) {
+                game_state.session.service_selection_index = option_count - 1;
+            }
+        }
+        if (input.just_pressed[KEY_DOWN]) {
+            game_state.session.service_selection_index++;
+            if (game_state.session.service_selection_index >= option_count) {
+                game_state.session.service_selection_index = 0;
+            }
+        }
+        if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
+            u2_execute_service_action();
+        }
+        return;
+    }
+
+    if (game_state.session.panel != U2_PANEL_NONE) {
+        if (input.just_pressed[KEY_ESC] || (game_state.session.panel == U2_PANEL_CHARACTER && input.just_pressed[KEY_C]) || (game_state.session.panel == U2_PANEL_INVENTORY && input.just_pressed[KEY_I])) {
+            game_state.session.panel = U2_PANEL_NONE;
+        }
+        return;
+    }
+
+    if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
+        u2_try_interact_forward();
+        return;
+    }
+
+    if (input.just_pressed[KEY_C]) {
+        game_state.session.panel = U2_PANEL_CHARACTER;
+        return;
+    }
+    if (input.just_pressed[KEY_I]) {
+        game_state.session.panel = U2_PANEL_INVENTORY;
+        return;
+    }
+}
+
+static void u2_update_player_movement(float dt) {
+    const U2MoveDirection direction = u2_get_requested_direction();
+    const float step_delay = u2_is_sprint_pressed() ? U2_SPRINT_STEP_DELAY : U2_STEP_DELAY;
+
+    if (direction == U2_MOVE_NONE) {
+        game_state.session.held_move_direction = U2_MOVE_NONE;
+        game_state.session.move_repeat_timer = 0.0f;
+        return;
+    }
+
+    if (direction == game_state.session.held_move_direction) {
+        game_state.session.move_repeat_timer = min(game_state.session.move_repeat_timer, step_delay);
+    }
+
+    game_state.session.move_repeat_timer -= dt;
+    if (direction != game_state.session.held_move_direction || game_state.session.move_repeat_timer <= 0.0f) {
+        u2_try_move_player(direction);
+        game_state.session.move_repeat_timer = step_delay;
+    }
+
+    game_state.session.held_move_direction = direction;
+}
+
+static void u2_update_gameplay(float dt) {
+    u2_update_message_timer(dt);
+    u2_update_hostile_encounter_cooldown(dt);
+    u2_update_gameplay_ui();
+
+    if (u2_session_input_locked(&game_state.session)) {
+        return;
+    }
+
+    u2_update_player_movement(dt);
+    u2_update_camera(dt);
+}
+
+void game_init(void) {
+    platform_set_window_size(800, 600);
+
+    memset(&game_state, 0, sizeof(game_state));
+
+    items_init();
+    assets_load_bitmap("tiles", "assets/tiles.png");
+    assets_load_bitmap("frame", "assets/frame.png");
+    font_bitmap = load_bitmap("assets/cp437_8x8.png");
+    font = ascii_font_create(font_bitmap, true);
+
+    game_state.frame_slice = (NineSlice){
+        .bitmap = AGB("frame"),
+        .top = 4,
+        .bottom = 4,
+        .left = 4,
+        .right = 4,
+        .stretch_mode = SLICE_MODE_TILE,
+    };
+
+    u2_build_tile_lookup();
+    u2_session_init(&game_state.session);
+}
+
+void game_update(float dt) {
+    switch (game_state.session.flow_state) {
+        case U2_FLOW_TITLE:
+            u2_update_title();
+            break;
+        case U2_FLOW_CLASS_SELECT:
+            u2_update_class_select();
+            break;
+        case U2_FLOW_PLAYING:
+        default:
+            u2_update_gameplay(dt);
+            break;
+    }
+
+    game_draw();
+}
+
+void game_final(void) {
+    ascii_font_free(font);
+    free_bitmap(font_bitmap);
+}
+
+#endif // GAME_H
