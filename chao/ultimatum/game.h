@@ -20,7 +20,6 @@ static const float U2_SPRINT_STEP_DELAY = 0.10f;
 static const float U2_LOG_MESSAGE_DURATION = 2.75f;
 static const float U2_CAMERA_SMOOTHNESS = 12.0f;
 static const float U2_MESSAGE_REVEAL_CHARS_PER_SECOND = 120.0f;
-static const float U2_ENCOUNTER_MESSAGE_COOLDOWN = 0.75f;
 static const int U2_STEPS_PER_FOOD_DEPLETION = 4;
 static const int U2_STEPS_PER_FOOD_REGEN = 7;
 static const int U2_MONSTER_CHASE_RADIUS = 8;
@@ -35,6 +34,7 @@ enum {
 
 static AsciiFont* font;
 static Bitmap* font_bitmap;
+static int u2_cached_save_exists = -1;
 
 typedef struct {
     const U2TileDef* tile_lookup[256];
@@ -96,6 +96,73 @@ typedef struct {
 } U2SaveData;
 
 static UltimatumGameState game_state;
+
+static char u2_hex_digit(int value) {
+    return (char)(value < 10 ? ('0' + value) : ('A' + (value - 10)));
+}
+
+static bool u2_try_parse_hex_digit(char c, unsigned char* out_value) {
+    if (out_value == NULL) {
+        return false;
+    }
+
+    if (c >= '0' && c <= '9') {
+        *out_value = (unsigned char)(c - '0');
+        return true;
+    }
+    if (c >= 'A' && c <= 'F') {
+        *out_value = (unsigned char)(10 + (c - 'A'));
+        return true;
+    }
+    if (c >= 'a' && c <= 'f') {
+        *out_value = (unsigned char)(10 + (c - 'a'));
+        return true;
+    }
+
+    return false;
+}
+
+static char* u2_encode_save_data_hex(const U2SaveData* save_data) {
+    const unsigned char* bytes = (const unsigned char*)save_data;
+    const size_t byte_count = sizeof(*save_data);
+    char* encoded = (char*)malloc(byte_count * 2 + 1);
+
+    if (save_data == NULL || encoded == NULL) {
+        free(encoded);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < byte_count; ++i) {
+        encoded[i * 2] = u2_hex_digit((bytes[i] >> 4) & 0x0F);
+        encoded[i * 2 + 1] = u2_hex_digit(bytes[i] & 0x0F);
+    }
+    encoded[byte_count * 2] = '\0';
+    return encoded;
+}
+
+static bool u2_decode_save_data_hex(U2SaveData* save_data, const char* encoded) {
+    unsigned char* bytes = (unsigned char*)save_data;
+    const size_t byte_count = sizeof(*save_data);
+    const size_t encoded_length = encoded != NULL ? strlen(encoded) : 0;
+
+    if (save_data == NULL || encoded == NULL || encoded_length != byte_count * 2) {
+        return false;
+    }
+
+    for (size_t i = 0; i < byte_count; ++i) {
+        unsigned char high = 0;
+        unsigned char low = 0;
+
+        if (!u2_try_parse_hex_digit(encoded[i * 2], &high) ||
+            !u2_try_parse_hex_digit(encoded[i * 2 + 1], &low)) {
+            return false;
+        }
+
+        bytes[i] = (unsigned char)((high << 4) | low);
+    }
+
+    return true;
+}
 
 static void u2_copy_string(char* dst, size_t dst_size, const char* src) {
     if (dst == NULL || dst_size == 0) {
@@ -335,6 +402,72 @@ static void u2_scene_clear_entities(void) {
     u2_session_clear_scene_entities(&game_state.session);
 }
 
+static U2PersistentEntityState* u2_get_persistent_entity_state(const char* id, bool create_if_missing) {
+    U2PersistentEntityState* empty_slot = NULL;
+
+    if (id == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < U2_MAX_ENTITIES; ++i) {
+        U2PersistentEntityState* state = &game_state.session.persistent_entities[i];
+        if (state->in_use && state->id != NULL && strcmp(state->id, id) == 0) {
+            return state;
+        }
+        if (empty_slot == NULL && !state->in_use) {
+            empty_slot = state;
+        }
+    }
+
+    if (!create_if_missing || empty_slot == NULL) {
+        return NULL;
+    }
+
+    memset(empty_slot, 0, sizeof(*empty_slot));
+    empty_slot->in_use = true;
+    empty_slot->id = id;
+    return empty_slot;
+}
+
+static void u2_seed_persistent_entity_state_from_entity(U2PersistentEntityState* state, const U2Entity* entity) {
+    if (state == NULL || entity == NULL) {
+        return;
+    }
+
+    state->seeded = true;
+    state->active = entity->active;
+    state->tile_x = entity->tile_x;
+    state->tile_y = entity->tile_y;
+    state->facing = entity->facing;
+    state->hp = entity->sheet.hp;
+    state->mp = entity->sheet.mp;
+}
+
+static void u2_sync_persistent_entity_state_from_entity(const U2Entity* entity) {
+    U2PersistentEntityState* state = NULL;
+
+    if (entity == NULL || entity->id == NULL) {
+        return;
+    }
+
+    state = u2_get_persistent_entity_state(entity->id, true);
+    if (state == NULL) {
+        return;
+    }
+
+    u2_seed_persistent_entity_state_from_entity(state, entity);
+}
+
+static void u2_mark_persistent_entity_inactive(const char* id) {
+    U2PersistentEntityState* state = u2_get_persistent_entity_state(id, true);
+    if (state == NULL) {
+        return;
+    }
+
+    state->seeded = true;
+    state->active = false;
+}
+
 static void u2_assign_spawn_sheet(U2Entity* entity, const U2SpawnDef* spawn_def) {
     const U2MonsterTemplate* monster_template = spawn_def != NULL ? u2_find_monster_template(spawn_def->monster_template_id) : NULL;
 
@@ -387,6 +520,8 @@ static void u2_spawn_scene_entity_from_def(const U2SpawnDef* spawn_def) {
     for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
         U2Entity* entity = &game_state.session.scene_entities[i];
         if (!entity->active) {
+            U2PersistentEntityState* persistent_state = u2_get_persistent_entity_state(spawn_def->id, true);
+
             u2_entity_init(entity, spawn_def->id, spawn_def->name, spawn_def->kind, spawn_def->tile_name, spawn_def->tile_x, spawn_def->tile_y);
             entity->solid = spawn_def->solid;
             entity->hostile = spawn_def->hostile;
@@ -395,6 +530,25 @@ static void u2_spawn_scene_entity_from_def(const U2SpawnDef* spawn_def) {
             entity->interaction_kind = spawn_def->interaction_kind;
             entity->dialogue_id = spawn_def->dialogue_id;
             u2_assign_spawn_sheet(entity, spawn_def);
+
+            if (persistent_state != NULL) {
+                if (!persistent_state->seeded) {
+                    u2_seed_persistent_entity_state_from_entity(persistent_state, entity);
+                }
+
+                if (!persistent_state->active) {
+                    u2_entity_reset(entity);
+                    return;
+                }
+
+                entity->tile_x = persistent_state->tile_x;
+                entity->tile_y = persistent_state->tile_y;
+                entity->facing = persistent_state->facing;
+                entity->sheet.hp = max(0, persistent_state->hp);
+                entity->sheet.mp = max(0, persistent_state->mp);
+                u2_entity_clamp_to_map(entity, game_state.session.current_map);
+            }
+
             return;
         }
     }
@@ -638,6 +792,246 @@ static bool u2_is_hostile_entity(const U2Entity* entity) {
     return u2_entity_is_valid(entity) && (entity->hostile || entity->kind == U2_ENTITY_KIND_MONSTER);
 }
 
+static void u2_append_textf(char* dst, size_t dst_size, const char* fmt, ...) {
+    va_list args;
+    size_t length = 0;
+
+    if (dst == NULL || dst_size == 0 || fmt == NULL) {
+        return;
+    }
+
+    length = strlen(dst);
+    if (length >= dst_size - 1) {
+        return;
+    }
+
+    va_start(args, fmt);
+    vsnprintf(dst + length, dst_size - length, fmt, args);
+    va_end(args);
+}
+
+static void u2_set_combat_log(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    vsnprintf(game_state.session.combat.log, sizeof(game_state.session.combat.log), fmt, args);
+    va_end(args);
+}
+
+static U2Entity* u2_get_combat_source_entity(void) {
+    if (!game_state.session.combat.active || game_state.session.combat.source_entity_id[0] == '\0') {
+        return NULL;
+    }
+
+    return u2_find_scene_entity_by_id(game_state.session.combat.source_entity_id);
+}
+
+static const U2MonsterTemplate* u2_find_monster_template_for_entity(const U2Entity* entity) {
+    const U2SpawnDef* spawn_def = NULL;
+
+    if (entity == NULL || entity->id == NULL) {
+        return NULL;
+    }
+
+    spawn_def = u2_find_spawn_def(entity->id);
+    return spawn_def != NULL ? u2_find_monster_template(spawn_def->monster_template_id) : NULL;
+}
+
+static int u2_get_hostile_reward_gold(const U2Entity* entity) {
+    const U2MonsterTemplate* monster_template = u2_find_monster_template_for_entity(entity);
+    return monster_template != NULL ? monster_template->reward_gold : 0;
+}
+
+static void u2_end_combat_to_playing(void) {
+    game_state.session.flow_state = U2_FLOW_PLAYING;
+    game_state.session.held_move_direction = U2_MOVE_NONE;
+    game_state.session.move_repeat_timer = U2_STEP_DELAY;
+    u2_session_clear_combat(&game_state.session);
+}
+
+static void u2_return_from_combat_with_message(const char* fmt, ...) {
+    char text[U2_MESSAGE_TEXT_MAX];
+    va_list args;
+
+    va_start(args, fmt);
+    vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+
+    u2_end_combat_to_playing();
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", text);
+}
+
+static void u2_build_attack_resolution_text(
+    Character* attacker,
+    const char* attacker_name,
+    Character* target,
+    const char* target_name,
+    char* dst,
+    size_t dst_size
+) {
+    int attack_bonus = 0;
+
+    if (dst == NULL || dst_size == 0 || attacker == NULL || target == NULL) {
+        return;
+    }
+
+    dst[0] = '\0';
+    attack_bonus = d20_get_attack_bonus(attacker, BONUS_MELEE);
+
+    for (int i = 0; i < d20_get_number_of_attacks(attacker); ++i) {
+        int damage = -1;
+        bool used_right_hand = false;
+        const char* separator = dst[0] == '\0' ? "" : " ";
+
+        if (target->hp <= 0) {
+            break;
+        }
+
+        if (d20_get_item_type(attacker, SLOT_HAND_RIGHT) != ITEM_TYPE_SHIELD) {
+            damage = d20_perform_single_attack(attacker, target, SLOT_HAND_RIGHT, attack_bonus - (i * 5));
+            if (damage > 0) {
+                u2_append_textf(dst, dst_size, "%s%s hits %s for %d.", separator, attacker_name, target_name, damage);
+            } else if (damage == 0) {
+                u2_append_textf(dst, dst_size, "%s%s strikes %s but deals no damage.", separator, attacker_name, target_name);
+            } else {
+                u2_append_textf(dst, dst_size, "%s%s misses %s.", separator, attacker_name, target_name);
+            }
+            used_right_hand = true;
+        }
+
+        if (target->hp <= 0) {
+            break;
+        }
+
+        if (d20_get_item_type(attacker, SLOT_HAND_LEFT) != ITEM_TYPE_SHIELD &&
+            (d20_is_dual_wielding(attacker) || !used_right_hand)) {
+            damage = d20_perform_single_attack(attacker, target, SLOT_HAND_LEFT, attack_bonus - (i * 5));
+            separator = dst[0] == '\0' ? "" : " ";
+            if (damage > 0) {
+                u2_append_textf(dst, dst_size, "%s%s follows up for %d.", separator, attacker_name, damage);
+            } else if (damage == 0) {
+                u2_append_textf(dst, dst_size, "%s%s cannot break through.", separator, attacker_name);
+            } else {
+                u2_append_textf(dst, dst_size, "%s%s misses again.", separator, attacker_name);
+            }
+        }
+    }
+
+    if (target->hp < 0) {
+        target->hp = 0;
+    }
+    if (dst[0] == '\0') {
+        snprintf(dst, dst_size, "%s hesitates.", attacker_name);
+    }
+}
+
+static void u2_handle_combat_defeat(void) {
+    u2_restore_player_fully();
+    u2_load_scene("castleBritish", 13, 13);
+    u2_return_from_combat_with_message("You are carried to Castle British and restored to full strength.");
+}
+
+static void u2_handle_combat_victory(void) {
+    U2Entity* source_entity = u2_get_combat_source_entity();
+    const int reward_gold = u2_get_hostile_reward_gold(&game_state.session.combat.enemy);
+
+    if (source_entity != NULL) {
+        u2_mark_persistent_entity_inactive(source_entity->id);
+        u2_entity_reset(source_entity);
+    } else if (game_state.session.combat.source_entity_id[0] != '\0') {
+        u2_mark_persistent_entity_inactive(game_state.session.combat.source_entity_id);
+    }
+
+    game_state.session.gold += reward_gold;
+    u2_return_from_combat_with_message(
+        "%s falls. You gather %d gold from the fight.",
+        game_state.session.combat.enemy.name,
+        reward_gold
+    );
+}
+
+static void u2_resolve_enemy_combat_turn(void) {
+    char log_text[U2_MESSAGE_TEXT_MAX];
+
+    u2_build_attack_resolution_text(
+        &game_state.session.combat.enemy.sheet,
+        game_state.session.combat.enemy.name,
+        &game_state.session.player.sheet,
+        game_state.session.player_name,
+        log_text,
+        sizeof(log_text)
+    );
+
+    if (game_state.session.player.sheet.hp <= 0) {
+        u2_set_combat_log("%s You collapse.", log_text);
+        u2_handle_combat_defeat();
+        return;
+    }
+
+    u2_set_combat_log("%s", log_text);
+}
+
+static void u2_resolve_player_combat_attack(void) {
+    char log_text[U2_MESSAGE_TEXT_MAX];
+
+    u2_build_attack_resolution_text(
+        &game_state.session.player.sheet,
+        game_state.session.player_name,
+        &game_state.session.combat.enemy.sheet,
+        game_state.session.combat.enemy.name,
+        log_text,
+        sizeof(log_text)
+    );
+
+    if (game_state.session.combat.enemy.sheet.hp <= 0) {
+        u2_set_combat_log("%s %s is defeated.", log_text, game_state.session.combat.enemy.name);
+        u2_handle_combat_victory();
+        return;
+    }
+
+    u2_set_combat_log("%s", log_text);
+    u2_resolve_enemy_combat_turn();
+}
+
+static void u2_try_flee_from_combat(void) {
+    const int chance = clamp(
+        45 + (game_state.session.player.sheet.stats[STAT_DEX] - game_state.session.combat.enemy.sheet.stats[STAT_DEX]) * 5,
+        20,
+        85
+    );
+
+    if (coin_flip(chance)) {
+        u2_return_from_combat_with_message("You escape from %s.", game_state.session.combat.enemy.name);
+        return;
+    }
+
+    u2_set_combat_log("You fail to escape from %s.", game_state.session.combat.enemy.name);
+    u2_resolve_enemy_combat_turn();
+}
+
+static void u2_begin_hostile_encounter(const U2Entity* entity) {
+    if (!u2_is_hostile_entity(entity) || game_state.session.flow_state == U2_FLOW_COMBAT) {
+        return;
+    }
+
+    u2_close_service_panel();
+    game_state.session.panel = U2_PANEL_NONE;
+    game_state.session.held_move_direction = U2_MOVE_NONE;
+    game_state.session.move_repeat_timer = U2_STEP_DELAY;
+    u2_session_clear_message(&game_state.session);
+    u2_session_clear_combat(&game_state.session);
+    game_state.session.flow_state = U2_FLOW_COMBAT;
+    game_state.session.combat.active = true;
+    game_state.session.combat.enemy = *entity;
+    game_state.session.combat.selection_index = 0;
+    u2_copy_string(
+        game_state.session.combat.source_entity_id,
+        sizeof(game_state.session.combat.source_entity_id),
+        entity->id
+    );
+    u2_set_combat_log("%s closes in. Fight or flee.", entity->name);
+}
+
 static int u2_get_axis_delta_toward_target(int from, int to, int size, bool looped) {
     int delta = to - from;
 
@@ -690,21 +1084,6 @@ static bool u2_is_within_entity_roam_radius(const U2Entity* entity, int target_x
     return abs(delta_x) <= entity->roam_radius && abs(delta_y) <= entity->roam_radius;
 }
 
-static void u2_trigger_hostile_encounter(const U2Entity* entity) {
-    if (!u2_is_hostile_entity(entity) || game_state.session.encounter_message_cooldown > 0.0f) {
-        return;
-    }
-
-    game_state.session.encounter_message_cooldown = U2_ENCOUNTER_MESSAGE_COOLDOWN;
-    u2_session_show_message(
-        &game_state.session,
-        false,
-        U2_LOG_MESSAGE_DURATION,
-        "%s lunges at you. Combat is next, so for now it just blocks your path.",
-        entity->name
-    );
-}
-
 static bool u2_try_move_hostile_entity(U2Entity* entity, int dx, int dy) {
     int target_x = 0;
     int target_y = 0;
@@ -735,7 +1114,8 @@ static bool u2_try_move_hostile_entity(U2Entity* entity, int dx, int dy) {
         if (dx > 0) entity->facing = U2_FACING_EAST;
         if (dy < 0) entity->facing = U2_FACING_NORTH;
         if (dy > 0) entity->facing = U2_FACING_SOUTH;
-        u2_trigger_hostile_encounter(entity);
+        u2_sync_persistent_entity_state_from_entity(entity);
+        u2_begin_hostile_encounter(entity);
         return true;
     }
 
@@ -745,6 +1125,7 @@ static bool u2_try_move_hostile_entity(U2Entity* entity, int dx, int dy) {
     }
 
     u2_entity_move_by(entity, game_state.session.current_map, dx, dy);
+    u2_sync_persistent_entity_state_from_entity(entity);
     return true;
 }
 
@@ -810,17 +1191,14 @@ static void u2_update_hostile_entity(U2Entity* entity) {
     }
 }
 
-static void u2_update_hostile_encounter_cooldown(float dt) {
-    if (game_state.session.encounter_message_cooldown > 0.0f) {
-        game_state.session.encounter_message_cooldown = max(0.0f, game_state.session.encounter_message_cooldown - dt);
-    }
-}
-
 static void u2_take_hostile_turn(void) {
     if (!u2_scene_is_looped()) {
         return;
     }
     for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
+        if (game_state.session.flow_state == U2_FLOW_COMBAT) {
+            return;
+        }
         u2_update_hostile_entity(&game_state.session.scene_entities[i]);
     }
 }
@@ -1018,7 +1396,7 @@ static void u2_interact_with_entity(const U2Entity* entity) {
     const U2DialogueDef* dialogue = u2_find_dialogue(entity->dialogue_id);
 
     if (u2_is_hostile_entity(entity)) {
-        u2_trigger_hostile_encounter(entity);
+        u2_begin_hostile_encounter(entity);
         return;
     }
 
@@ -1416,13 +1794,16 @@ static void u2_draw_service_panel(void) {
 }
 
 static bool u2_save_exists(void) {
-    FILE* file = fopen(U2_SAVE_FILE_PATH, "rb");
-    if (file == NULL) {
-        return false;
+    char* data = NULL;
+
+    if (u2_cached_save_exists >= 0) {
+        return u2_cached_save_exists != 0;
     }
 
-    fclose(file);
-    return true;
+    data = platform_load(U2_SAVE_FILE_PATH);
+    u2_cached_save_exists = data != NULL ? 1 : 0;
+    free(data);
+    return u2_cached_save_exists != 0;
 }
 
 static void u2_save_character(U2SavedCharacter* saved_character, const Character* character) {
@@ -1513,58 +1894,62 @@ static void u2_fill_save_data(U2SaveData* save_data) {
         save_data->inventory[i].amount = (int)slot->amount;
     }
 
-    for (int i = 0; i < U2_MAX_SCENE_ENTITIES; ++i) {
-        const U2Entity* entity = &game_state.session.scene_entities[i];
+    for (int i = 0; i < U2_MAX_ENTITIES; ++i) {
+        const U2PersistentEntityState* persistent_state = &game_state.session.persistent_entities[i];
         U2SavedSceneEntity* saved_entity = &save_data->scene_entities[save_data->scene_entity_count];
 
-        if (!u2_entity_is_valid(entity) || save_data->scene_entity_count >= U2_MAX_SCENE_ENTITIES) {
+        if (!persistent_state->in_use || persistent_state->id == NULL || save_data->scene_entity_count >= U2_MAX_SCENE_ENTITIES) {
             continue;
         }
 
-        saved_entity->active = 1;
-        u2_copy_string(saved_entity->id, sizeof(saved_entity->id), entity->id);
-        saved_entity->tile_x = entity->tile_x;
-        saved_entity->tile_y = entity->tile_y;
-        saved_entity->facing = entity->facing;
-        saved_entity->hp = entity->sheet.hp;
-        saved_entity->mp = entity->sheet.mp;
+        saved_entity->active = persistent_state->active ? 1 : 0;
+        u2_copy_string(saved_entity->id, sizeof(saved_entity->id), persistent_state->id);
+        saved_entity->tile_x = persistent_state->tile_x;
+        saved_entity->tile_y = persistent_state->tile_y;
+        saved_entity->facing = persistent_state->facing;
+        saved_entity->hp = persistent_state->hp;
+        saved_entity->mp = persistent_state->mp;
         save_data->scene_entity_count++;
     }
 }
 
 static bool u2_write_save_data(const U2SaveData* save_data) {
-    FILE* file = NULL;
+    char* encoded = NULL;
     bool success = false;
 
     if (save_data == NULL) {
         return false;
     }
 
-    file = fopen(U2_SAVE_FILE_PATH, "wb");
-    if (file == NULL) {
+    encoded = u2_encode_save_data_hex(save_data);
+    if (encoded == NULL) {
         return false;
     }
 
-    success = fwrite(save_data, sizeof(*save_data), 1, file) == 1;
-    fclose(file);
+    success = platform_save(U2_SAVE_FILE_PATH, encoded);
+    free(encoded);
+    if (success) {
+        u2_cached_save_exists = 1;
+    }
     return success;
 }
 
 static bool u2_read_save_data(U2SaveData* save_data) {
-    FILE* file = NULL;
+    char* encoded = NULL;
     bool success = false;
 
     if (save_data == NULL) {
         return false;
     }
 
-    file = fopen(U2_SAVE_FILE_PATH, "rb");
-    if (file == NULL) {
+    encoded = platform_load(U2_SAVE_FILE_PATH);
+    if (encoded == NULL) {
+        u2_cached_save_exists = 0;
         return false;
     }
 
-    success = fread(save_data, sizeof(*save_data), 1, file) == 1;
-    fclose(file);
+    success = u2_decode_save_data_hex(save_data, encoded);
+    free(encoded);
 
     if (!success ||
         memcmp(save_data->magic, "U2SV", U2_SAVE_MAGIC_SIZE) != 0 ||
@@ -1572,6 +1957,7 @@ static bool u2_read_save_data(U2SaveData* save_data) {
         return false;
     }
 
+    u2_cached_save_exists = 1;
     save_data->inventory_count = clamp(save_data->inventory_count, 0, U2_MAX_INVENTORY_SLOTS);
     save_data->scene_entity_count = clamp(save_data->scene_entity_count, 0, U2_MAX_SCENE_ENTITIES);
     return true;
@@ -1596,30 +1982,37 @@ static void u2_restore_inventory_from_save(const U2SaveData* save_data) {
     }
 }
 
-static void u2_apply_saved_scene_entities(const U2SaveData* save_data) {
-    if (save_data == NULL || game_state.session.current_map == NULL) {
+static void u2_restore_persistent_entities_from_save(const U2SaveData* save_data) {
+    if (save_data == NULL) {
         return;
     }
 
     for (int i = 0; i < save_data->scene_entity_count; ++i) {
         const U2SavedSceneEntity* saved_entity = &save_data->scene_entities[i];
-        U2Entity* entity = NULL;
+        const U2SpawnDef* spawn_def = NULL;
+        U2PersistentEntityState* persistent_state = NULL;
 
-        if (!saved_entity->active || saved_entity->id[0] == '\0') {
+        if (saved_entity->id[0] == '\0') {
             continue;
         }
 
-        entity = u2_find_scene_entity_by_id(saved_entity->id);
-        if (entity == NULL) {
+        spawn_def = u2_find_spawn_def(saved_entity->id);
+        if (spawn_def == NULL) {
             continue;
         }
 
-        entity->tile_x = saved_entity->tile_x;
-        entity->tile_y = saved_entity->tile_y;
-        entity->facing = (U2Facing)clamp(saved_entity->facing, U2_FACING_SOUTH, U2_FACING_EAST);
-        entity->sheet.hp = max(0, saved_entity->hp);
-        entity->sheet.mp = max(0, saved_entity->mp);
-        u2_entity_clamp_to_map(entity, game_state.session.current_map);
+        persistent_state = u2_get_persistent_entity_state(spawn_def->id, true);
+        if (persistent_state == NULL) {
+            continue;
+        }
+
+        persistent_state->seeded = true;
+        persistent_state->active = saved_entity->active != 0;
+        persistent_state->tile_x = saved_entity->tile_x;
+        persistent_state->tile_y = saved_entity->tile_y;
+        persistent_state->facing = (U2Facing)clamp(saved_entity->facing, U2_FACING_SOUTH, U2_FACING_EAST);
+        persistent_state->hp = max(0, saved_entity->hp);
+        persistent_state->mp = max(0, saved_entity->mp);
     }
 }
 
@@ -1658,9 +2051,9 @@ static bool u2_try_load_game(void) {
     game_state.session.food_depletion_step_counter = max(0, save_data.food_depletion_step_counter);
     game_state.session.food_regen_step_counter = max(0, save_data.food_regen_step_counter);
     u2_restore_inventory_from_save(&save_data);
+    u2_restore_persistent_entities_from_save(&save_data);
     u2_load_scene(save_data.current_map_id, save_data.player_tile_x, save_data.player_tile_y);
     game_state.session.player.facing = (U2Facing)clamp(save_data.player_facing, U2_FACING_SOUTH, U2_FACING_EAST);
-    u2_apply_saved_scene_entities(&save_data);
     u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "Loaded saved journey.");
     return true;
 }
@@ -1742,6 +2135,59 @@ static void u2_draw_gameplay(void) {
     }
 }
 
+static void u2_draw_combat(void) {
+    char player_damage[64];
+    char enemy_damage[64];
+    const int w = 304;
+    const int h = 188;
+    const int x = (screen_size.x - w) / 2;
+    const int y = 24;
+    const int log_y = y + 96;
+
+    u2_draw_gameplay();
+    u2_draw_panel(x, y, w, h);
+
+    d20_get_damage_string(&game_state.session.player.sheet, SLOT_HAND_RIGHT, player_damage);
+    d20_get_damage_string(&game_state.session.combat.enemy.sheet, SLOT_HAND_RIGHT, enemy_damage);
+
+    ascii_font_draw_ex(chao_canvas, font, screen_size.x / 2, y + 10, COLOR_YELLOW, TEXT_ALIGN_CENTER, -1, "ENCOUNTER");
+
+    u2_draw_tile(game_state.session.player.tile, x + 18, y + 26);
+    ascii_font_draw(chao_canvas, font, x + 40, y + 28, COLOR_WHITE, "%s", game_state.session.player_name);
+    ascii_font_draw(chao_canvas, font, x + 40, y + 40, COLOR_LIGHTGRAY, "HP %d/%d", game_state.session.player.sheet.hp, d20_get_max_hp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 40, y + 52, COLOR_LIGHTGRAY, "MP %d/%d", game_state.session.player.sheet.mp, d20_get_max_mp(&game_state.session.player.sheet));
+    ascii_font_draw(chao_canvas, font, x + 40, y + 64, COLOR_LIGHTGRAY, "AC %d  DMG %s", d20_get_armor_class(&game_state.session.player.sheet), player_damage);
+
+    u2_draw_tile(game_state.session.combat.enemy.tile, x + 186, y + 26);
+    ascii_font_draw(chao_canvas, font, x + 208, y + 28, COLOR_WHITE, "%s", game_state.session.combat.enemy.name);
+    ascii_font_draw(chao_canvas, font, x + 208, y + 40, COLOR_LIGHTGRAY, "HP %d/%d", max(0, game_state.session.combat.enemy.sheet.hp), d20_get_max_hp(&game_state.session.combat.enemy.sheet));
+    ascii_font_draw(chao_canvas, font, x + 208, y + 52, COLOR_LIGHTGRAY, "MP %d/%d", max(0, game_state.session.combat.enemy.sheet.mp), d20_get_max_mp(&game_state.session.combat.enemy.sheet));
+    ascii_font_draw(chao_canvas, font, x + 208, y + 64, COLOR_LIGHTGRAY, "AC %d  DMG %s", d20_get_armor_class(&game_state.session.combat.enemy.sheet), enemy_damage);
+
+    ascii_font_draw(chao_canvas, font, x + 12, y + 82, COLOR_YELLOW, "Battle Log");
+    u2_draw_wrapped_text(x + 12, log_y, w - 24, COLOR_WHITE, game_state.session.combat.log);
+
+    ascii_font_draw(
+        chao_canvas,
+        font,
+        x + 12,
+        y + h - 34,
+        game_state.session.combat.selection_index == 0 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+        "%s Attack",
+        game_state.session.combat.selection_index == 0 ? ">" : " "
+    );
+    ascii_font_draw(
+        chao_canvas,
+        font,
+        x + 12,
+        y + h - 22,
+        game_state.session.combat.selection_index == 1 ? COLOR_WHITE : COLOR_LIGHTGRAY,
+        "%s Flee",
+        game_state.session.combat.selection_index == 1 ? ">" : " "
+    );
+    ascii_font_draw(chao_canvas, font, x + 126, y + h - 16, COLOR_YELLOW, "Up/Down select  Enter acts  A/F quick");
+}
+
 static void game_draw(void) {
     switch (game_state.session.flow_state) {
         case U2_FLOW_TITLE:
@@ -1749,6 +2195,9 @@ static void game_draw(void) {
             break;
         case U2_FLOW_CLASS_SELECT:
             u2_draw_class_select();
+            break;
+        case U2_FLOW_COMBAT:
+            u2_draw_combat();
             break;
         case U2_FLOW_PLAYING:
         default:
@@ -1913,6 +2362,49 @@ static void u2_update_class_select(void) {
     }
 }
 
+static void u2_update_combat(void) {
+    if (!game_state.session.combat.active) {
+        game_state.session.flow_state = U2_FLOW_PLAYING;
+        return;
+    }
+
+    if (input.just_pressed[KEY_F5] || input.just_pressed[KEY_F9]) {
+        u2_set_combat_log("You cannot save or load while steel is drawn.");
+        return;
+    }
+
+    if (input.just_pressed[KEY_UP] || input.just_pressed[KEY_LEFT]) {
+        game_state.session.combat.selection_index--;
+        if (game_state.session.combat.selection_index < 0) {
+            game_state.session.combat.selection_index = 1;
+        }
+        return;
+    }
+
+    if (input.just_pressed[KEY_DOWN] || input.just_pressed[KEY_RIGHT]) {
+        game_state.session.combat.selection_index = (game_state.session.combat.selection_index + 1) % 2;
+        return;
+    }
+
+    if (input.just_pressed[KEY_A]) {
+        u2_resolve_player_combat_attack();
+        return;
+    }
+
+    if (input.just_pressed[KEY_F] || input.just_pressed[KEY_ESC]) {
+        u2_try_flee_from_combat();
+        return;
+    }
+
+    if (input.just_pressed[KEY_ENTER] || input.just_pressed[KEY_SPACE]) {
+        if (game_state.session.combat.selection_index == 0) {
+            u2_resolve_player_combat_attack();
+        } else {
+            u2_try_flee_from_combat();
+        }
+    }
+}
+
 static void u2_update_gameplay_ui(void) {
     if (input.just_pressed[KEY_F5]) {
         if (u2_try_save_game()) {
@@ -2015,7 +2507,6 @@ static void u2_update_player_movement(float dt) {
 
 static void u2_update_gameplay(float dt) {
     u2_update_message_timer(dt);
-    u2_update_hostile_encounter_cooldown(dt);
     u2_update_gameplay_ui();
 
     if (u2_session_input_locked(&game_state.session)) {
@@ -2057,6 +2548,9 @@ void game_update(float dt) {
             break;
         case U2_FLOW_CLASS_SELECT:
             u2_update_class_select();
+            break;
+        case U2_FLOW_COMBAT:
+            u2_update_combat();
             break;
         case U2_FLOW_PLAYING:
         default:

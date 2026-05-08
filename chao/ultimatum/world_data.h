@@ -47,6 +47,7 @@ typedef struct {
     int subterfuge;
     int knowledge;
     int communication;
+    int reward_gold;
 } U2MonsterTemplate;
 
 typedef struct {
@@ -209,9 +210,9 @@ static const U2ClassTemplate u2_class_templates[] = {
 static const size_t u2_class_templates_count = sizeof(u2_class_templates) / sizeof(u2_class_templates[0]);
 
 static const U2MonsterTemplate u2_monster_templates[] = {
-    { "orc", CLASS_NONE, 9, 0, "1d6", 10, 12, 10, 6, 2, 0, 0, 0 },
-    { "gremlin", CLASS_NONE, 7, 0, "1d4", 10, 9, 14, 7, 1, 3, 0, 0 },
-    { "viper", CLASS_NONE, 6, 0, "1d4+1", 10, 10, 13, 4, 1, 1, 0, 0 },
+    { "orc", CLASS_NONE, 9, 0, "1d6", 10, 12, 10, 6, 2, 0, 0, 0, 12 },
+    { "gremlin", CLASS_NONE, 7, 0, "1d4", 10, 9, 14, 7, 1, 3, 0, 0, 8 },
+    { "viper", CLASS_NONE, 6, 0, "1d4+1", 10, 10, 13, 4, 1, 1, 0, 0, 6 },
 };
 
 static const size_t u2_monster_templates_count = sizeof(u2_monster_templates) / sizeof(u2_monster_templates[0]);
@@ -313,6 +314,20 @@ static const U2ClassTemplate* u2_get_class_template_by_index(int index) {
         return NULL;
     }
     return &u2_class_templates[index];
+}
+
+static const U2SpawnDef* u2_find_spawn_def(const char* id) {
+    if (id == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < u2_spawn_defs_count; ++i) {
+        if (strcmp(u2_spawn_defs[i].id, id) == 0) {
+            return &u2_spawn_defs[i];
+        }
+    }
+
+    return NULL;
 }
 
 static const U2TransitionDef* u2_find_transition(const char* map_id, int tile_x, int tile_y) {

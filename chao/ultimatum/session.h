@@ -17,6 +17,7 @@ typedef enum {
     U2_FLOW_TITLE = 0,
     U2_FLOW_CLASS_SELECT,
     U2_FLOW_PLAYING,
+    U2_FLOW_COMBAT,
 } U2FlowState;
 
 typedef enum {
@@ -54,6 +55,26 @@ typedef struct {
 } U2MessageState;
 
 typedef struct {
+    bool in_use;
+    bool seeded;
+    bool active;
+    const char* id;
+    int tile_x;
+    int tile_y;
+    U2Facing facing;
+    int hp;
+    int mp;
+} U2PersistentEntityState;
+
+typedef struct {
+    bool active;
+    U2Entity enemy;
+    char source_entity_id[32];
+    int selection_index;
+    char log[U2_MESSAGE_TEXT_MAX];
+} U2CombatState;
+
+typedef struct {
     bool started;
     char player_name[U2_PLAYER_NAME_MAX];
     CharacterClass chosen_class;
@@ -69,11 +90,12 @@ typedef struct {
     int food_regen_step_counter;
     int class_selection_index;
     float move_repeat_timer;
-    float encounter_message_cooldown;
     U2MoveDirection held_move_direction;
     U2Inventory inventory;
     const char* active_service_entity_id;
     int service_selection_index;
+    U2PersistentEntityState persistent_entities[U2_MAX_ENTITIES];
+    U2CombatState combat;
     U2MessageState message;
 } U2GameSession;
 
@@ -111,6 +133,10 @@ static bool u2_inventory_add_by_id(U2Inventory* inventory, const char* item_id, 
 
 static void u2_session_clear_scene_entities(U2GameSession* session) {
     memset(session->scene_entities, 0, sizeof(session->scene_entities));
+}
+
+static void u2_session_clear_combat(U2GameSession* session) {
+    memset(&session->combat, 0, sizeof(session->combat));
 }
 
 static void u2_session_clear_message(U2GameSession* session) {
@@ -151,6 +177,8 @@ static void u2_session_init(U2GameSession* session) {
     session->class_selection_index = 0;
     u2_inventory_clear(&session->inventory);
     u2_session_clear_scene_entities(session);
+    memset(session->persistent_entities, 0, sizeof(session->persistent_entities));
+    u2_session_clear_combat(session);
     u2_session_clear_message(session);
 }
 
