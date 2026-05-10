@@ -64,6 +64,9 @@ typedef struct {
 	Item* equipment[SLOT_END];
 } Character;
 
+int d20_get_damage_bonus(Character* chara);
+void d20_get_damage_string(Character* chara, Slot slot, char* out, size_t out_size);
+
 int d20_get_exp_for_level(int level) {
     if (level <= 1) return 0;
     if (level <= 7) {
@@ -117,10 +120,9 @@ ItemType d20_get_item_type(Character* chara, Slot slot) {
 }
 
 float d20_get_weapon_damage(Character* chara, Slot slot, bool is_critic) {
-    char* damage = chara->base_damage;
-    if (chara->equipment[slot] != NULL) {
-        damage = chara->equipment[slot]->damage;
-    }
+    char damage[64];
+
+    d20_get_damage_string(chara, slot, damage, sizeof(damage));
     if (is_critic) {
         return roll_dice_max(damage);
     }
@@ -150,39 +152,46 @@ int d20_get_attack_bonus(Character* chara, Bonus bonus) {
     return 0;
 }
 
-void d20_get_damage_string(Character* chara, Slot slot, char* out) {
+void d20_get_damage_string(Character* chara, Slot slot, char* out, size_t out_size) {
     char* damage = chara->base_damage;
     if (chara->equipment[slot] != NULL) {
         damage = chara->equipment[slot]->damage;
     }
-    int stat_bonus = d20_get_stat_bonus(chara, STAT_STR);
-    if (stat_bonus != 0) {
+    int total_bonus = d20_get_stat_bonus(chara, STAT_STR) + d20_get_damage_bonus(chara);
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    if (damage == NULL || damage[0] == '\0') {
+        snprintf(out, out_size, "-");
+        return;
+    }
+    if (total_bonus != 0) {
         const char* plus = strchr(damage, '+');
         const char* minus = strchr(damage, '-');
         const char* op = plus != NULL ? plus : minus;
         if (op != NULL) {
             int mod = atoi(op);
             size_t len = (size_t)(op - damage);
-            mod += stat_bonus;
+            mod += total_bonus;
             if (mod != 0) {
                 if (mod > 0) {
-                    sprintf(out, "%.*s+%d", (int)len, damage, mod);
+                    snprintf(out, out_size, "%.*s+%d", (int)len, damage, mod);
                 } else {
-                    sprintf(out, "%.*s%d", (int)len, damage, mod);
+                    snprintf(out, out_size, "%.*s%d", (int)len, damage, mod);
                 }
                 return;
             } else {
-                sprintf(out, "%.*s", (int)len, damage);
+                snprintf(out, out_size, "%.*s", (int)len, damage);
                 return;
             }
         } else {
-            char sign = stat_bonus > 0 ? '+' : '-';
-            sprintf(out, "%s%c%d", damage, sign, stat_bonus);
+            char sign = total_bonus > 0 ? '+' : '-';
+            snprintf(out, out_size, "%s%c%d", damage, sign, total_bonus);
             return;
         }
 
     }
-    strcpy(out, damage);
+    snprintf(out, out_size, "%s", damage);
 }
 
 int d20_get_damage_bonus(Character* chara) {

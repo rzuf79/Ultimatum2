@@ -108,6 +108,7 @@ typedef struct {
     int food;
     int food_depletion_step_counter;
     int food_regen_step_counter;
+    int title_selection_index;
     int class_selection_index;
     float move_repeat_timer;
     U2MoveDirection held_move_direction;
@@ -232,6 +233,7 @@ static void u2_session_init(U2GameSession* session) {
     session->panel = U2_PANEL_NONE;
     session->active_service_entity_id = NULL;
     session->service_selection_index = 0;
+    session->title_selection_index = 0;
     session->class_selection_index = 0;
     session->inventory_selection_index = 0;
     session->spell_selection_index = 0;
