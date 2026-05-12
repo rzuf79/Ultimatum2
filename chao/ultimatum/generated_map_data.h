@@ -27,6 +27,7 @@ typedef struct {
 } U2MapDef;
 
 static const U2TileDef u2_tile_defs[] = {
+    { "void", (char)0x20, 0, 0, 0x000000FFu, false },
     { "grass", (char)0x2E, 0, 0, 0x008751FFu, true },
     { "forest", (char)0x26, 1, 0, 0x008751FFu, true },
     { "water", (char)0x7E, 2, 0, 0x29ADFFFFu, false },

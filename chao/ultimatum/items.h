@@ -113,6 +113,46 @@ void items_init() {
 		.damage = NULL,
 		.armor_class = 1,
 	};
+	items[i++] = (Item) {
+		.id = "long_sword",
+		.name = "Long Sword",
+		.type = ITEM_TYPE_WEAPON,
+		.stackable = false,
+		.damage = "1d10",
+		.armor_class = 0,
+	};
+	items[i++] = (Item) {
+		.id = "wizard_staff",
+		.name = "Wizard Staff",
+		.type = ITEM_TYPE_WEAPON,
+		.stackable = false,
+		.damage = "1d8",
+		.armor_class = 0,
+	};
+	items[i++] = (Item) {
+		.id = "scale_armor",
+		.name = "Scale Armor",
+		.type = ITEM_TYPE_ARMOR,
+		.stackable = false,
+		.damage = NULL,
+		.armor_class = 2,
+	};
+	items[i++] = (Item) {
+		.id = "warded_robe",
+		.name = "Warded Robe",
+		.type = ITEM_TYPE_ARMOR,
+		.stackable = false,
+		.damage = NULL,
+		.armor_class = 1,
+	};
+	items[i++] = (Item) {
+		.id = "iron_shield",
+		.name = "Iron Shield",
+		.type = ITEM_TYPE_SHIELD,
+		.stackable = false,
+		.damage = NULL,
+		.armor_class = 2,
+	};
 		items[i++] = (Item) {
 			.id = "trail_ration",
 			.name = "Trail Ration",

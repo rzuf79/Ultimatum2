@@ -11,6 +11,7 @@ enum {
     U2_MAX_INVENTORY_SLOTS = 16,
     U2_MESSAGE_TEXT_MAX = 512,
     U2_PLAYER_NAME_MAX = 32,
+    U2_SESSION_ID_MAX = 32,
 };
 
 typedef enum {
@@ -59,7 +60,7 @@ typedef struct {
     bool in_use;
     bool seeded;
     bool active;
-    const char* id;
+    char id[U2_SESSION_ID_MAX];
     int tile_x;
     int tile_y;
     U2Facing facing;
@@ -95,6 +96,17 @@ typedef struct {
 } U2SpellProjectileState;
 
 typedef struct {
+    bool active;
+    bool tower_mode;
+    bool spawn_at_down_stair;
+    unsigned int seed;
+    int depth;
+    char return_map_id[U2_SESSION_ID_MAX];
+    int return_x;
+    int return_y;
+} U2DungeonState;
+
+typedef struct {
     bool started;
     char player_name[U2_PLAYER_NAME_MAX];
     CharacterClass chosen_class;
@@ -110,6 +122,7 @@ typedef struct {
     int food_regen_step_counter;
     int title_selection_index;
     int class_selection_index;
+    int character_selection_index;
     float move_repeat_timer;
     U2MoveDirection held_move_direction;
     U2Inventory inventory;
@@ -121,6 +134,7 @@ typedef struct {
     U2CombatState combat;
     U2SpellTargetingState spell_targeting;
     U2SpellProjectileState spell_projectile;
+    U2DungeonState dungeon;
     U2MessageState message;
 } U2GameSession;
 
@@ -235,6 +249,7 @@ static void u2_session_init(U2GameSession* session) {
     session->service_selection_index = 0;
     session->title_selection_index = 0;
     session->class_selection_index = 0;
+    session->character_selection_index = 0;
     session->inventory_selection_index = 0;
     session->spell_selection_index = 0;
     u2_inventory_clear(&session->inventory);

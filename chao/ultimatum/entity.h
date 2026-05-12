@@ -7,7 +7,7 @@
 #include "d20.h"
 
 enum {
-    U2_MAX_ENTITIES = 64,
+    U2_MAX_ENTITIES = 256,
 };
 
 typedef enum {
@@ -47,6 +47,7 @@ typedef struct {
     U2Facing facing;
     U2InteractionKind interaction_kind;
     const char* dialogue_id;
+    const char* monster_template_id;
     Character sheet;
 } U2Entity;
 
@@ -95,6 +96,7 @@ static void u2_entity_init(U2Entity* entity, const char* id, const char* name, U
     entity->facing = U2_FACING_SOUTH;
     entity->interaction_kind = U2_INTERACTION_NONE;
     entity->dialogue_id = NULL;
+    entity->monster_template_id = NULL;
 }
 
 static void u2_entity_set_character_sheet(

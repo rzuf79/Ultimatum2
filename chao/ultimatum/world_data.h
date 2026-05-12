@@ -78,6 +78,16 @@ typedef struct {
 } U2TransitionDef;
 
 typedef struct {
+    const char* id;
+    const char* surface_map_id;
+    int surface_x;
+    int surface_y;
+    bool tower_mode;
+    const char* name;
+    int level_count;
+} U2DungeonPresetDef;
+
+typedef struct {
     const char* map_id;
     const char* id;
     const char* name;
@@ -254,6 +264,13 @@ static const U2TransitionDef u2_transition_defs[] = {
 
 static const size_t u2_transition_defs_count = sizeof(u2_transition_defs) / sizeof(u2_transition_defs[0]);
 
+static const U2DungeonPresetDef u2_dungeon_preset_defs[] = {
+    { "serpentpit", "bc1423", 25, 5, false, "Serpent Pit", 5 },
+    { "moontower", "bc1423", 24, 40, true, "Moon Tower", 5 },
+};
+
+static const size_t u2_dungeon_preset_defs_count = sizeof(u2_dungeon_preset_defs) / sizeof(u2_dungeon_preset_defs[0]);
+
 static const U2SpawnDef u2_spawn_defs[] = {
     { "bc1423", "loop_guard", "Loop Guard", U2_ENTITY_KIND_NPC, CLASS_FIGHTER, NULL, "guard", 12, 17, true, false, false, 0, U2_INTERACTION_TALK, "loop_guard" },
     { "bc1423", "weathered_sign", "Weathered Sign", U2_ENTITY_KIND_NPC, CLASS_NONE, NULL, "signpost", 58, 51, true, false, false, 0, U2_INTERACTION_SIGN, "weathered_sign" },
@@ -409,6 +426,29 @@ static const U2TransitionDef* u2_find_transition(const char* map_id, int tile_x,
             return transition;
         }
     }
+    return NULL;
+}
+
+static const U2DungeonPresetDef* u2_find_dungeon_preset(
+    const char* surface_map_id,
+    int surface_x,
+    int surface_y,
+    bool tower_mode
+) {
+    if (surface_map_id == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < u2_dungeon_preset_defs_count; ++i) {
+        const U2DungeonPresetDef* preset = &u2_dungeon_preset_defs[i];
+        if (preset->tower_mode == tower_mode &&
+            preset->surface_x == surface_x &&
+            preset->surface_y == surface_y &&
+            strcmp(preset->surface_map_id, surface_map_id) == 0) {
+            return preset;
+        }
+    }
+
     return NULL;
 }
 
