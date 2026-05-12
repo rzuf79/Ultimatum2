@@ -177,9 +177,25 @@ void items_init() {
 			.damage = NULL,
 			.armor_class = 0,
 		};
-		items[i++] = (Item) {
-			.id = "spellbook",
-			.name = "Spellbook",
+	items[i++] = (Item) {
+		.id = "spellbook",
+		.name = "Spellbook",
+		.type = ITEM_TYPE_KEY,
+		.stackable = false,
+		.damage = NULL,
+		.armor_class = 0,
+	};
+	items[i++] = (Item) {
+		.id = "serpent_idol",
+		.name = "Serpent Idol",
+		.type = ITEM_TYPE_KEY,
+		.stackable = false,
+		.damage = NULL,
+		.armor_class = 0,
+	};
+	items[i++] = (Item) {
+		.id = "moon_lens",
+		.name = "Moon Lens",
 		.type = ITEM_TYPE_KEY,
 		.stackable = false,
 		.damage = NULL,

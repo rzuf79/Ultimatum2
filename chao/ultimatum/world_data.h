@@ -85,6 +85,12 @@ typedef struct {
     bool tower_mode;
     const char* name;
     int level_count;
+    const char* theme_id;
+    const char* guardian_monster_template_id;
+    const char* guardian_name;
+    const char* final_reward_relic_item_id;
+    int final_reward_gold;
+    const char* final_bonus_item_id;
 } U2DungeonPresetDef;
 
 typedef struct {
@@ -241,6 +247,8 @@ static const U2MonsterTemplate u2_monster_templates[] = {
     { "orc", CLASS_NONE, 9, 0, "1d6", 10, 12, 10, 6, 2, 0, 0, 0, 12, 18 },
     { "gremlin", CLASS_NONE, 7, 0, "1d4", 10, 9, 14, 7, 1, 3, 0, 0, 8, 12 },
     { "viper", CLASS_NONE, 6, 0, "1d4+1", 10, 10, 13, 4, 1, 1, 0, 0, 6, 10 },
+    { "serpent_matriarch", CLASS_NONE, 22, 0, "1d8+2", 12, 15, 14, 6, 4, 1, 0, 0, 26, 60 },
+    { "moon_warden", CLASS_NONE, 20, 6, "1d6+3", 13, 11, 14, 15, 2, 1, 3, 0, 28, 64 },
 };
 
 static const size_t u2_monster_templates_count = sizeof(u2_monster_templates) / sizeof(u2_monster_templates[0]);
@@ -265,8 +273,8 @@ static const U2TransitionDef u2_transition_defs[] = {
 static const size_t u2_transition_defs_count = sizeof(u2_transition_defs) / sizeof(u2_transition_defs[0]);
 
 static const U2DungeonPresetDef u2_dungeon_preset_defs[] = {
-    { "serpentpit", "bc1423", 25, 5, false, "Serpent Pit", 5 },
-    { "moontower", "bc1423", 24, 40, true, "Moon Tower", 5 },
+    { "serpentpit", "bc1423", 25, 5, false, "Serpent Pit", 5, "serpent", "serpent_matriarch", "Serpent Matriarch", "serpent_idol", 180, "scale_armor" },
+    { "moontower", "bc1423", 24, 40, true, "Moon Tower", 5, "moon", "moon_warden", "Moon Warden", "moon_lens", 180, "wizard_staff" },
 };
 
 static const size_t u2_dungeon_preset_defs_count = sizeof(u2_dungeon_preset_defs) / sizeof(u2_dungeon_preset_defs[0]);

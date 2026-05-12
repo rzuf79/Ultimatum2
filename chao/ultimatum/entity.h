@@ -48,6 +48,7 @@ typedef struct {
     U2InteractionKind interaction_kind;
     const char* dialogue_id;
     const char* monster_template_id;
+    bool dungeon_guardian;
     Character sheet;
 } U2Entity;
 
@@ -97,6 +98,7 @@ static void u2_entity_init(U2Entity* entity, const char* id, const char* name, U
     entity->interaction_kind = U2_INTERACTION_NONE;
     entity->dialogue_id = NULL;
     entity->monster_template_id = NULL;
+    entity->dungeon_guardian = false;
 }
 
 static void u2_entity_set_character_sheet(

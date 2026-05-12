@@ -34,7 +34,7 @@ enum {
     U2_SAVE_ID_MAX = 32,
     U2_SAVE_DAMAGE_MAX = 16,
     U2_SAVE_MAGIC_SIZE = 4,
-    U2_SAVE_VERSION = 5,
+    U2_SAVE_VERSION = 6,
 };
 
 enum {
@@ -47,7 +47,7 @@ enum {
     U2_DUNGEON_MAP_HEIGHT = 48,
     U2_DUNGEON_MAX_ROOMS = 8,
     U2_DUNGEON_MAX_MONSTERS = 12,
-    U2_DUNGEON_MAX_TREASURES = 6,
+    U2_DUNGEON_MAX_TREASURES = 8,
     U2_DUNGEON_NAME_MAX = 48,
     U2_DUNGEON_FOV_RADIUS = 8,
 };
@@ -106,6 +106,11 @@ typedef struct {
 } U2SavedDungeonSeenPreset;
 
 typedef struct {
+    int cleared;
+    int final_chest_opened;
+} U2SavedDungeonPresetProgress;
+
+typedef struct {
     char magic[U2_SAVE_MAGIC_SIZE];
     int version;
     char player_name[U2_PLAYER_NAME_MAX];
@@ -123,6 +128,7 @@ typedef struct {
     U2SavedInventorySlot inventory[U2_MAX_INVENTORY_SLOTS];
     U2SavedDungeonState dungeon;
     U2SavedDungeonSeenPreset dungeon_seen[U2_MAX_DUNGEON_PRESETS];
+    U2SavedDungeonPresetProgress dungeon_progress[U2_MAX_DUNGEON_PRESETS];
     int scene_entity_count;
     U2SavedSceneEntity scene_entities[U2_MAX_ENTITIES];
 } U2SaveData;
@@ -154,12 +160,19 @@ typedef struct {
 } U2AttackResolution;
 
 typedef struct {
+    const char* template_id;
+    const char* name;
+    const char* tile_name;
+} U2DungeonMonsterChoice;
+
+typedef struct {
     char id[U2_SAVE_ID_MAX];
     const char* template_id;
     const char* name;
     const char* tile_name;
     int tile_x;
     int tile_y;
+    bool guardian;
 } U2DungeonMonsterSpawn;
 
 typedef enum {
@@ -167,6 +180,7 @@ typedef enum {
     U2_DUNGEON_TREASURE_GOLD,
     U2_DUNGEON_TREASURE_FOOD,
     U2_DUNGEON_TREASURE_ITEM,
+    U2_DUNGEON_TREASURE_FINAL_CHEST,
 } U2DungeonTreasureKind;
 
 typedef struct {
@@ -193,6 +207,7 @@ typedef struct {
     int dungeon_treasure_count;
     unsigned char dungeon_visible[U2_DUNGEON_MAP_HEIGHT][U2_DUNGEON_MAP_WIDTH];
     U2SavedDungeonSeenPreset dungeon_seen[U2_MAX_DUNGEON_PRESETS];
+    U2SavedDungeonPresetProgress dungeon_progress[U2_MAX_DUNGEON_PRESETS];
     int dungeon_up_x;
     int dungeon_up_y;
     int dungeon_down_x;
@@ -208,6 +223,7 @@ static U2PersistentEntityState* u2_get_persistent_entity_state(const char* id, b
 static const U2DungeonTreasureSpawn* u2_find_runtime_dungeon_treasure_at(int tile_x, int tile_y);
 static bool u2_open_runtime_dungeon_treasure_at_player_position(void);
 static void u2_take_hostile_turn(void);
+static void u2_append_textf(char* dst, size_t dst_size, const char* fmt, ...);
 
 static char u2_hex_digit(int value) {
     return (char)(value < 10 ? ('0' + value) : ('A' + (value - 10)));
@@ -428,6 +444,27 @@ static int u2_get_current_dungeon_preset_index(void) {
     return u2_get_dungeon_preset_index(u2_get_current_dungeon_preset());
 }
 
+static U2SavedDungeonPresetProgress* u2_get_dungeon_preset_progress(const U2DungeonPresetDef* preset) {
+    const int preset_index = u2_get_dungeon_preset_index(preset);
+
+    if (preset_index < 0 || preset_index >= U2_MAX_DUNGEON_PRESETS) {
+        return NULL;
+    }
+
+    return &game_state.dungeon_progress[preset_index];
+}
+
+static const U2SavedDungeonPresetProgress* u2_get_current_dungeon_preset_progress(void) {
+    return u2_get_dungeon_preset_progress(u2_get_current_dungeon_preset());
+}
+
+static bool u2_dungeon_preset_uses_theme(const U2DungeonPresetDef* preset, const char* theme_id) {
+    return preset != NULL &&
+        preset->theme_id != NULL &&
+        theme_id != NULL &&
+        strcmp(preset->theme_id, theme_id) == 0;
+}
+
 static bool u2_current_expedition_is_tower(void) {
     return game_state.session.dungeon.active && game_state.session.dungeon.tower_mode;
 }
@@ -456,6 +493,31 @@ static int u2_get_current_expedition_max_levels(void) {
     return max(1, preset->level_count);
 }
 
+static bool u2_current_dungeon_is_final_floor(void) {
+    return game_state.session.dungeon.active &&
+        game_state.session.dungeon.depth >= u2_get_current_expedition_max_levels();
+}
+
+static void u2_append_current_dungeon_objective_text(char* message, size_t message_size) {
+    const U2DungeonPresetDef* preset = u2_get_current_dungeon_preset();
+    const U2SavedDungeonPresetProgress* preset_progress = u2_get_current_dungeon_preset_progress();
+
+    if (message == NULL || message_size == 0 || preset == NULL) {
+        return;
+    }
+
+    if (preset_progress != NULL && preset_progress->cleared != 0) {
+        u2_append_textf(message, message_size, " It lies silent, and its prize is already claimed.");
+        return;
+    }
+
+    if (u2_current_dungeon_is_final_floor() &&
+        preset->guardian_name != NULL &&
+        preset->guardian_name[0] != '\0') {
+        u2_append_textf(message, message_size, " %s guards the final chest on this floor.", preset->guardian_name);
+    }
+}
+
 static int u2_get_current_dungeon_level_index(void) {
     return clamp(game_state.session.dungeon.depth - 1, 0, U2_DUNGEON_MAX_LEVELS - 1);
 }
@@ -476,6 +538,7 @@ static void u2_clear_runtime_dungeon_visibility(void) {
 
 static void u2_clear_all_dungeon_progress(void) {
     memset(game_state.dungeon_seen, 0, sizeof(game_state.dungeon_seen));
+    memset(game_state.dungeon_progress, 0, sizeof(game_state.dungeon_progress));
     u2_clear_runtime_dungeon_visibility();
     game_state.dungeon_treasure_count = 0;
 }
@@ -1090,11 +1153,45 @@ static void u2_clear_runtime_dungeon_treasures(void) {
     game_state.dungeon_treasure_count = 0;
 }
 
+static const U2DungeonMonsterSpawn* u2_get_current_runtime_dungeon_guardian_spawn(void) {
+    for (int i = 0; i < game_state.dungeon_monster_count; ++i) {
+        if (game_state.dungeon_monster_spawns[i].guardian) {
+            return &game_state.dungeon_monster_spawns[i];
+        }
+    }
+
+    return NULL;
+}
+
+static bool u2_is_current_runtime_dungeon_guardian_alive(void) {
+    const U2DungeonMonsterSpawn* guardian_spawn = u2_get_current_runtime_dungeon_guardian_spawn();
+    U2PersistentEntityState* persistent_state = NULL;
+
+    if (guardian_spawn == NULL || guardian_spawn->id[0] == '\0') {
+        return false;
+    }
+
+    persistent_state = u2_get_persistent_entity_state(guardian_spawn->id, false);
+    if (persistent_state == NULL || !persistent_state->seeded) {
+        return true;
+    }
+
+    return persistent_state->active;
+}
+
 static bool u2_runtime_dungeon_treasure_is_active(const U2DungeonTreasureSpawn* treasure) {
     U2PersistentEntityState* persistent_state = NULL;
+    const U2SavedDungeonPresetProgress* preset_progress = NULL;
 
     if (treasure == NULL || treasure->id[0] == '\0') {
         return false;
+    }
+
+    if (treasure->kind == U2_DUNGEON_TREASURE_FINAL_CHEST) {
+        preset_progress = u2_get_current_dungeon_preset_progress();
+        if (preset_progress != NULL && preset_progress->final_chest_opened != 0) {
+            return false;
+        }
     }
 
     persistent_state = u2_get_persistent_entity_state(treasure->id, true);
@@ -1145,26 +1242,26 @@ static const char* u2_choose_dungeon_treasure_item(
         "scale_armor",
         "iron_shield",
     };
-    static const char* tower_common[] = {
+    static const char* moon_common[] = {
         "focus_tonic",
         "lesser_healing_potion",
         "oak_staff",
         "traveler_robe",
-        "wooden_shield",
+        "focus_tonic",
     };
-    static const char* tower_rare[] = {
+    static const char* moon_rare[] = {
         "wizard_staff",
         "warded_robe",
-        "iron_shield",
+        "focus_tonic",
     };
     const char* const* table = serpent_common;
     size_t table_count = sizeof(serpent_common) / sizeof(serpent_common[0]);
 
-    if (preset != NULL && preset->tower_mode) {
-        table = rare_loot ? tower_rare : tower_common;
+    if (u2_dungeon_preset_uses_theme(preset, "moon")) {
+        table = rare_loot ? moon_rare : moon_common;
         table_count = rare_loot
-            ? sizeof(tower_rare) / sizeof(tower_rare[0])
-            : sizeof(tower_common) / sizeof(tower_common[0]);
+            ? sizeof(moon_rare) / sizeof(moon_rare[0])
+            : sizeof(moon_common) / sizeof(moon_common[0]);
     } else if (rare_loot) {
         table = serpent_rare;
         table_count = sizeof(serpent_rare) / sizeof(serpent_rare[0]);
@@ -1173,10 +1270,20 @@ static const char* u2_choose_dungeon_treasure_item(
     return table[u2_rng_range(rng, 0, (int)table_count - 1)];
 }
 
-static void u2_generate_active_dungeon_treasures(void) {
+static void u2_generate_active_dungeon_treasures(
+    int reserved_tile_a_x,
+    int reserved_tile_a_y,
+    int reserved_tile_b_x,
+    int reserved_tile_b_y
+) {
     const U2DungeonPresetDef* preset = u2_get_current_dungeon_preset();
     U2LocalRng rng;
-    const int treasure_count = clamp(2 + (game_state.session.dungeon.depth / 2), 2, U2_DUNGEON_MAX_TREASURES);
+    const bool final_floor = u2_current_dungeon_is_final_floor();
+    const int treasure_count = clamp(
+        2 + (game_state.session.dungeon.depth / 2),
+        2,
+        U2_DUNGEON_MAX_TREASURES - (final_floor ? 1 : 0)
+    );
 
     u2_clear_runtime_dungeon_treasures();
     u2_rng_seed(
@@ -1193,11 +1300,14 @@ static void u2_generate_active_dungeon_treasures(void) {
         for (int tries = 0; tries < 256 && !found; ++tries) {
             const int tile_x = u2_rng_range(&rng, 1, U2_DUNGEON_MAP_WIDTH - 2);
             const int tile_y = u2_rng_range(&rng, 1, U2_DUNGEON_MAP_HEIGHT - 2);
-            const int reward_roll = u2_rng_range(&rng, 0, 99);
+            U2DungeonTreasureKind treasure_kind = U2_DUNGEON_TREASURE_ITEM;
+            bool rare_loot = false;
 
             if (!u2_dungeon_tile_is_floor(tile_x, tile_y) ||
                 (tile_x == game_state.dungeon_up_x && tile_y == game_state.dungeon_up_y) ||
                 (tile_x == game_state.dungeon_down_x && tile_y == game_state.dungeon_down_y) ||
+                (tile_x == reserved_tile_a_x && tile_y == reserved_tile_a_y) ||
+                (tile_x == reserved_tile_b_x && tile_y == reserved_tile_b_y) ||
                 u2_find_runtime_dungeon_treasure_at(tile_x, tile_y) != NULL) {
                 continue;
             }
@@ -1227,29 +1337,56 @@ static void u2_generate_active_dungeon_treasures(void) {
             treasure->tile_x = tile_x;
             treasure->tile_y = tile_y;
 
-            if (reward_roll < 35) {
+            if (u2_dungeon_preset_uses_theme(preset, "moon")) {
+                const int reward_roll = u2_rng_range(&rng, 0, 99);
+                if (reward_roll < 25) {
+                    treasure_kind = U2_DUNGEON_TREASURE_GOLD;
+                } else if (reward_roll < 40) {
+                    treasure_kind = U2_DUNGEON_TREASURE_FOOD;
+                } else {
+                    treasure_kind = U2_DUNGEON_TREASURE_ITEM;
+                    rare_loot = reward_roll >= 84;
+                }
+            } else {
+                const int reward_roll = u2_rng_range(&rng, 0, 99);
+                if (reward_roll < 25) {
+                    treasure_kind = U2_DUNGEON_TREASURE_GOLD;
+                } else if (reward_roll < 60) {
+                    treasure_kind = U2_DUNGEON_TREASURE_FOOD;
+                } else {
+                    treasure_kind = U2_DUNGEON_TREASURE_ITEM;
+                    rare_loot = reward_roll >= 86;
+                }
+            }
+
+            if (treasure_kind == U2_DUNGEON_TREASURE_GOLD) {
                 treasure->kind = U2_DUNGEON_TREASURE_GOLD;
                 treasure->amount = u2_rng_range(
                     &rng,
                     10 + game_state.session.dungeon.depth * 5,
                     22 + game_state.session.dungeon.depth * 11
                 );
-            } else if (reward_roll < 60) {
+            } else if (treasure_kind == U2_DUNGEON_TREASURE_FOOD) {
                 treasure->kind = U2_DUNGEON_TREASURE_FOOD;
                 treasure->amount = u2_rng_range(
                     &rng,
-                    15 + game_state.session.dungeon.depth * 4,
-                    30 + game_state.session.dungeon.depth * 8
+                    u2_dungeon_preset_uses_theme(preset, "moon")
+                        ? 8 + game_state.session.dungeon.depth * 3
+                        : 15 + game_state.session.dungeon.depth * 4,
+                    u2_dungeon_preset_uses_theme(preset, "moon")
+                        ? 18 + game_state.session.dungeon.depth * 6
+                        : 30 + game_state.session.dungeon.depth * 8
                 );
             } else {
-                const bool rare_loot = reward_roll >= 88;
                 const char* item_id = u2_choose_dungeon_treasure_item(preset, &rng, rare_loot);
 
                 treasure->kind = U2_DUNGEON_TREASURE_ITEM;
                 treasure->amount = 1;
                 u2_copy_string(treasure->item_id, sizeof(treasure->item_id), item_id);
 
-                if (strcmp(item_id, "trail_ration") == 0 || strcmp(item_id, "focus_tonic") == 0) {
+                if (strcmp(item_id, "trail_ration") == 0 ||
+                    strcmp(item_id, "focus_tonic") == 0 ||
+                    strcmp(item_id, "lesser_healing_potion") == 0) {
                     treasure->amount = rare_loot ? 2 : 1;
                 }
             }
@@ -1293,29 +1430,50 @@ static void u2_generate_active_dungeon_floor(void) {
         int center_y;
     } U2DungeonRoom;
 
-    static const struct {
-        const char* template_id;
-        const char* name;
-        const char* tile_name;
-    } monster_choices[] = {
-        { "gremlin", "Dungeon Gremlin", "gremlin" },
+    static const U2DungeonMonsterChoice serpent_monster_choices[] = {
+        { "viper", "Dungeon Viper", "viper" },
         { "viper", "Dungeon Viper", "viper" },
         { "orc", "Dungeon Orc", "orc" },
+        { "gremlin", "Dungeon Gremlin", "gremlin" },
+    };
+    static const U2DungeonMonsterChoice moon_monster_choices[] = {
+        { "gremlin", "Moon Gremlin", "gremlin" },
+        { "gremlin", "Moon Gremlin", "gremlin" },
+        { "orc", "Tower Orc", "orc" },
+        { "viper", "Moon Viper", "viper" },
     };
 
     const U2DungeonPresetDef* preset = u2_get_current_dungeon_preset();
     const char* preset_id = preset != NULL ? preset->id : (u2_current_expedition_is_tower() ? "tower" : "dungeon");
+    const bool final_floor = u2_current_dungeon_is_final_floor();
+    const bool tower_mode = u2_current_expedition_is_tower();
+    const U2DungeonMonsterChoice* monster_choices = u2_dungeon_preset_uses_theme(preset, "moon")
+        ? moon_monster_choices
+        : serpent_monster_choices;
+    const int monster_choice_count = u2_dungeon_preset_uses_theme(preset, "moon")
+        ? (int)(sizeof(moon_monster_choices) / sizeof(moon_monster_choices[0]))
+        : (int)(sizeof(serpent_monster_choices) / sizeof(serpent_monster_choices[0]));
     U2LocalRng rng;
     U2DungeonRoom rooms[U2_DUNGEON_MAX_ROOMS];
     int room_count = 0;
     int attempts = 0;
+    U2DungeonRoom guardian_room = { 0 };
+    int guardian_x = -1;
+    int guardian_y = -1;
+    int final_chest_x = -1;
+    int final_chest_y = -1;
 
     if (!game_state.session.dungeon.active) {
         return;
     }
 
     u2_dungeon_fill(' ');
+    memset(game_state.dungeon_monster_spawns, 0, sizeof(game_state.dungeon_monster_spawns));
     game_state.dungeon_monster_count = 0;
+    game_state.dungeon_up_x = -1;
+    game_state.dungeon_up_y = -1;
+    game_state.dungeon_down_x = -1;
+    game_state.dungeon_down_y = -1;
     u2_rng_seed(&rng, game_state.session.dungeon.seed ^ (unsigned int)(game_state.session.dungeon.depth * 977u));
 
     while (room_count < U2_DUNGEON_MAX_ROOMS && attempts < 64) {
@@ -1375,12 +1533,33 @@ static void u2_generate_active_dungeon_floor(void) {
         u2_dungeon_carve_v_tunnel(rooms[0].center_y, rooms[1].center_y, rooms[1].center_x);
     }
 
-    game_state.dungeon_up_x = rooms[0].center_x;
-    game_state.dungeon_up_y = rooms[0].center_y;
-    game_state.dungeon_down_x = rooms[room_count - 1].center_x;
-    game_state.dungeon_down_y = rooms[room_count - 1].center_y;
-    u2_dungeon_set_tile(game_state.dungeon_up_x, game_state.dungeon_up_y, '<');
-    u2_dungeon_set_tile(game_state.dungeon_down_x, game_state.dungeon_down_y, '>');
+    guardian_room = rooms[room_count - 1];
+
+    if (final_floor) {
+        if (tower_mode) {
+            game_state.dungeon_up_x = -1;
+            game_state.dungeon_up_y = -1;
+            game_state.dungeon_down_x = rooms[0].center_x;
+            game_state.dungeon_down_y = rooms[0].center_y;
+        } else {
+            game_state.dungeon_up_x = rooms[0].center_x;
+            game_state.dungeon_up_y = rooms[0].center_y;
+            game_state.dungeon_down_x = -1;
+            game_state.dungeon_down_y = -1;
+        }
+    } else {
+        game_state.dungeon_up_x = rooms[0].center_x;
+        game_state.dungeon_up_y = rooms[0].center_y;
+        game_state.dungeon_down_x = rooms[room_count - 1].center_x;
+        game_state.dungeon_down_y = rooms[room_count - 1].center_y;
+    }
+
+    if (game_state.dungeon_up_x >= 0 && game_state.dungeon_up_y >= 0) {
+        u2_dungeon_set_tile(game_state.dungeon_up_x, game_state.dungeon_up_y, '<');
+    }
+    if (game_state.dungeon_down_x >= 0 && game_state.dungeon_down_y >= 0) {
+        u2_dungeon_set_tile(game_state.dungeon_down_x, game_state.dungeon_down_y, '>');
+    }
     u2_dungeon_build_wall_shell();
     snprintf(
         game_state.dungeon_map_name,
@@ -1391,26 +1570,76 @@ static void u2_generate_active_dungeon_floor(void) {
         game_state.session.dungeon.depth
     );
 
+    if (final_floor && preset != NULL) {
+        static const int chest_offsets[][2] = {
+            { 1, 0 },
+            { -1, 0 },
+            { 0, 1 },
+            { 0, -1 },
+            { 1, 1 },
+            { 1, -1 },
+            { -1, 1 },
+            { -1, -1 },
+            { 2, 0 },
+            { -2, 0 },
+            { 0, 2 },
+            { 0, -2 },
+        };
+
+        guardian_x = guardian_room.center_x;
+        guardian_y = guardian_room.center_y;
+        for (int i = 0; i < (int)(sizeof(chest_offsets) / sizeof(chest_offsets[0])); ++i) {
+            const int candidate_x = guardian_x + chest_offsets[i][0];
+            const int candidate_y = guardian_y + chest_offsets[i][1];
+
+            if (!u2_dungeon_tile_is_floor(candidate_x, candidate_y)) {
+                continue;
+            }
+            if ((candidate_x == game_state.dungeon_up_x && candidate_y == game_state.dungeon_up_y) ||
+                (candidate_x == game_state.dungeon_down_x && candidate_y == game_state.dungeon_down_y)) {
+                continue;
+            }
+
+            final_chest_x = candidate_x;
+            final_chest_y = candidate_y;
+            break;
+        }
+
+        if (final_chest_x < 0 || final_chest_y < 0) {
+            final_chest_x = guardian_x;
+            final_chest_y = clamp(guardian_y + 1, guardian_room.y, guardian_room.y + guardian_room.h - 1);
+        }
+    }
+
     game_state.dungeon_monster_count = min(
-        U2_DUNGEON_MAX_MONSTERS,
+        final_floor && preset != NULL ? U2_DUNGEON_MAX_MONSTERS - 1 : U2_DUNGEON_MAX_MONSTERS,
         max(4, room_count + 2 + game_state.session.dungeon.depth)
     );
 
     for (int i = 0; i < game_state.dungeon_monster_count; ++i) {
-        const int monster_index = u2_rng_range(&rng, 0, (int)(sizeof(monster_choices) / sizeof(monster_choices[0])) - 1);
+        const int monster_index = u2_rng_range(&rng, 0, monster_choice_count - 1);
+        const int first_spawnable_room = min(1, room_count - 1);
+        const int last_spawnable_room = final_floor ? room_count - 2 : room_count - 1;
         int tile_x = 0;
         int tile_y = 0;
         bool found = false;
 
+        if (last_spawnable_room < first_spawnable_room) {
+            game_state.dungeon_monster_count = i;
+            break;
+        }
+
         for (int tries = 0; tries < 128 && !found; ++tries) {
-            const int room_index = u2_rng_range(&rng, min(1, room_count - 1), room_count - 1);
+            const int room_index = u2_rng_range(&rng, first_spawnable_room, last_spawnable_room);
             const U2DungeonRoom* room = &rooms[room_index];
             tile_x = u2_rng_range(&rng, room->x, room->x + room->w - 1);
             tile_y = u2_rng_range(&rng, room->y, room->y + room->h - 1);
 
             if (!u2_dungeon_tile_is_floor(tile_x, tile_y) ||
                 (tile_x == game_state.dungeon_up_x && tile_y == game_state.dungeon_up_y) ||
-                (tile_x == game_state.dungeon_down_x && tile_y == game_state.dungeon_down_y)) {
+                (tile_x == game_state.dungeon_down_x && tile_y == game_state.dungeon_down_y) ||
+                (tile_x == guardian_x && tile_y == guardian_y) ||
+                (tile_x == final_chest_x && tile_y == final_chest_y)) {
                 continue;
             }
 
@@ -1442,9 +1671,53 @@ static void u2_generate_active_dungeon_floor(void) {
         game_state.dungeon_monster_spawns[i].tile_name = monster_choices[monster_index].tile_name;
         game_state.dungeon_monster_spawns[i].tile_x = tile_x;
         game_state.dungeon_monster_spawns[i].tile_y = tile_y;
+        game_state.dungeon_monster_spawns[i].guardian = false;
     }
 
-    u2_generate_active_dungeon_treasures();
+    if (final_floor && preset != NULL &&
+        guardian_x >= 0 && guardian_y >= 0 &&
+        game_state.dungeon_monster_count < U2_DUNGEON_MAX_MONSTERS) {
+        U2DungeonMonsterSpawn* guardian_spawn = &game_state.dungeon_monster_spawns[game_state.dungeon_monster_count++];
+
+        memset(guardian_spawn, 0, sizeof(*guardian_spawn));
+        snprintf(
+            guardian_spawn->id,
+            sizeof(guardian_spawn->id),
+            "dng_%s_l%02d_guardian",
+            preset_id,
+            max(1, game_state.session.dungeon.depth)
+        );
+        guardian_spawn->template_id = preset->guardian_monster_template_id;
+        guardian_spawn->name = preset->guardian_name;
+        guardian_spawn->tile_name = u2_dungeon_preset_uses_theme(preset, "moon") ? "wizard" : "viper";
+        guardian_spawn->tile_x = guardian_x;
+        guardian_spawn->tile_y = guardian_y;
+        guardian_spawn->guardian = true;
+    }
+
+    u2_generate_active_dungeon_treasures(guardian_x, guardian_y, final_chest_x, final_chest_y);
+
+    if (final_floor && preset != NULL &&
+        final_chest_x >= 0 && final_chest_y >= 0 &&
+        game_state.dungeon_treasure_count < U2_DUNGEON_MAX_TREASURES) {
+        U2DungeonTreasureSpawn* treasure = &game_state.dungeon_treasure_spawns[game_state.dungeon_treasure_count++];
+
+        memset(treasure, 0, sizeof(*treasure));
+        snprintf(
+            treasure->id,
+            sizeof(treasure->id),
+            "dng_%s_l%02d_final",
+            preset_id,
+            max(1, game_state.session.dungeon.depth)
+        );
+        treasure->tile_x = final_chest_x;
+        treasure->tile_y = final_chest_y;
+        treasure->kind = U2_DUNGEON_TREASURE_FINAL_CHEST;
+
+        if (u2_runtime_dungeon_treasure_is_active(treasure)) {
+            u2_dungeon_set_tile(final_chest_x, final_chest_y, 'u');
+        }
+    }
 }
 
 static void u2_begin_spell_targeting(const U2SpellDef* spell) {
@@ -1562,10 +1835,24 @@ static bool u2_open_runtime_dungeon_treasure_at_player_position(void) {
         game_state.session.player.tile_x,
         game_state.session.player.tile_y
     );
+    const U2DungeonPresetDef* preset = u2_get_current_dungeon_preset();
+    U2SavedDungeonPresetProgress* preset_progress = u2_get_dungeon_preset_progress(preset);
     char reward_text[U2_MESSAGE_TEXT_MAX];
+    const bool final_chest = treasure != NULL && treasure->kind == U2_DUNGEON_TREASURE_FINAL_CHEST;
 
     if (treasure == NULL) {
         return false;
+    }
+
+    if (final_chest && u2_is_current_runtime_dungeon_guardian_alive()) {
+        u2_session_show_message(
+            &game_state.session,
+            false,
+            U2_LOG_MESSAGE_DURATION,
+            "%s still watches the final chest.",
+            preset != NULL && preset->guardian_name != NULL ? preset->guardian_name : "The guardian"
+        );
+        return true;
     }
 
     reward_text[0] = '\0';
@@ -1582,6 +1869,41 @@ static bool u2_open_runtime_dungeon_treasure_at_player_position(void) {
         case U2_DUNGEON_TREASURE_ITEM:
             u2_try_add_loot_item(treasure->item_id, treasure->amount, reward_text, sizeof(reward_text));
             break;
+        case U2_DUNGEON_TREASURE_FINAL_CHEST:
+            if (preset != NULL) {
+                char reward_part[96];
+
+                if (preset->final_reward_relic_item_id != NULL &&
+                    u2_try_add_loot_item(preset->final_reward_relic_item_id, 1, reward_part, sizeof(reward_part))) {
+                    u2_append_textf(reward_text, sizeof(reward_text), "%s", reward_part);
+                }
+
+                if (preset->final_reward_gold > 0) {
+                    game_state.session.gold += preset->final_reward_gold;
+                    if (reward_text[0] != '\0') {
+                        u2_append_textf(reward_text, sizeof(reward_text), ", ");
+                    }
+                    u2_append_textf(reward_text, sizeof(reward_text), "%d gold", preset->final_reward_gold);
+                }
+
+                if (preset->final_bonus_item_id != NULL &&
+                    u2_try_add_loot_item(preset->final_bonus_item_id, 1, reward_part, sizeof(reward_part))) {
+                    if (reward_text[0] != '\0') {
+                        u2_append_textf(reward_text, sizeof(reward_text), ", ");
+                    }
+                    u2_append_textf(reward_text, sizeof(reward_text), "%s", reward_part);
+                }
+            }
+
+            if (reward_text[0] == '\0') {
+                snprintf(reward_text, sizeof(reward_text), "the last prize");
+            }
+
+            if (preset_progress != NULL) {
+                preset_progress->cleared = 1;
+                preset_progress->final_chest_opened = 1;
+            }
+            break;
         case U2_DUNGEON_TREASURE_NONE:
         default:
             snprintf(reward_text, sizeof(reward_text), "a handful of dust");
@@ -1590,7 +1912,15 @@ static bool u2_open_runtime_dungeon_treasure_at_player_position(void) {
 
     u2_mark_persistent_entity_inactive(treasure->id);
     u2_dungeon_set_tile(treasure->tile_x, treasure->tile_y, ',');
-    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "You open a chest and find %s.", reward_text);
+    u2_session_show_message(
+        &game_state.session,
+        false,
+        U2_LOG_MESSAGE_DURATION,
+        final_chest
+            ? "You claim the final chest and recover %s."
+            : "You open a chest and find %s.",
+        reward_text
+    );
     u2_take_hostile_turn();
     return true;
 }
@@ -1676,6 +2006,7 @@ static void u2_spawn_runtime_dungeon_entity(const U2DungeonMonsterSpawn* spawn, 
         entity->hostile = true;
         entity->roaming = true;
         entity->roam_radius = 10;
+        entity->dungeon_guardian = spawn->guardian;
         u2_assign_monster_sheet_from_template(entity, spawn->template_id);
 
         if (persistent_state != NULL) {
@@ -1892,6 +2223,7 @@ static bool u2_change_dungeon_depth(int delta) {
     const int current_depth = game_state.session.dungeon.depth;
     const int next_depth = current_depth + delta;
     const bool moving_deeper = delta > 0;
+    char message[U2_MESSAGE_TEXT_MAX];
 
     if (!game_state.session.dungeon.active) {
         return false;
@@ -1914,21 +2246,23 @@ static bool u2_change_dungeon_depth(int delta) {
 
     game_state.session.dungeon.depth = next_depth;
     u2_load_active_dungeon_floor(tower_mode ? moving_deeper : !moving_deeper);
-    u2_session_show_message(
-        &game_state.session,
-        false,
-        U2_LOG_MESSAGE_DURATION,
+    snprintf(
+        message,
+        sizeof(message),
         tower_mode
             ? (moving_deeper ? "You climb to %s T%d." : "You descend to %s T%d.")
             : (moving_deeper ? "You descend to %s B%d." : "You climb to %s B%d."),
         u2_get_current_expedition_place_name(),
         game_state.session.dungeon.depth
     );
+    u2_append_current_dungeon_objective_text(message, sizeof(message));
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", message);
     return true;
 }
 
 static bool u2_try_enter_dungeon_from_overworld(int entrance_x, int entrance_y, bool tower_mode) {
     const U2DungeonPresetDef* preset = NULL;
+    char message[U2_MESSAGE_TEXT_MAX];
 
     if (!u2_scene_is_looped() || game_state.session.current_map == NULL) {
         return false;
@@ -1937,15 +2271,16 @@ static bool u2_try_enter_dungeon_from_overworld(int entrance_x, int entrance_y, 
     preset = u2_find_dungeon_preset(game_state.session.current_map->id, entrance_x, entrance_y, tower_mode);
     u2_begin_new_dungeon_run(game_state.session.current_map->id, entrance_x, entrance_y, tower_mode);
     u2_load_active_dungeon_floor(tower_mode);
-    u2_session_show_message(
-        &game_state.session,
-        false,
-        U2_LOG_MESSAGE_DURATION,
+    snprintf(
+        message,
+        sizeof(message),
         tower_mode
             ? "You climb into %s."
             : "You descend into %s.",
         preset != NULL ? preset->name : (tower_mode ? "the tower" : "the dungeon")
     );
+    u2_append_current_dungeon_objective_text(message, sizeof(message));
+    u2_session_show_message(&game_state.session, false, U2_LOG_MESSAGE_DURATION, "%s", message);
     return true;
 }
 
@@ -2455,6 +2790,8 @@ static void u2_handle_hostile_defeat(U2Entity* entity) {
     char combined_message[U2_MESSAGE_TEXT_MAX];
     const int reward_gold = u2_get_hostile_reward_gold(entity);
     const int reward_exp = u2_get_hostile_reward_exp(entity);
+    const bool defeated_guardian = entity != NULL && entity->dungeon_guardian;
+    const char* defeated_name = entity != NULL ? entity->name : "The guardian";
 
     if (entity == NULL) {
         return;
@@ -2472,7 +2809,18 @@ static void u2_handle_hostile_defeat(U2Entity* entity) {
     u2_try_award_hostile_loot(entity, loot_message, sizeof(loot_message));
     u2_entity_reset(entity);
 
+    if (defeated_guardian) {
+        u2_append_textf(
+            combined_message,
+            sizeof(combined_message),
+            "%s falls. The final chest is now unguarded.",
+            defeated_name != NULL ? defeated_name : "The guardian"
+        );
+    }
     if (loot_message[0] != '\0') {
+        if (combined_message[0] != '\0') {
+            u2_append_textf(combined_message, sizeof(combined_message), " ");
+        }
         u2_append_textf(combined_message, sizeof(combined_message), "%s", loot_message);
     }
     if (level_up_message[0] != '\0') {
@@ -3905,7 +4253,7 @@ static void u2_draw_inventory_panel(void) {
 
     if (game_state.session.inventory.count == 0) {
         ascii_font_draw(chao_canvas, font, x + 10, y + 88, COLOR_LIGHTGRAY, "(empty)");
-        ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Esc closes");
+        // ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Esc closes");
         return;
     }
 
@@ -3952,21 +4300,21 @@ static void u2_draw_inventory_panel(void) {
         }
     }
 
-    if (game_state.session.inventory_selection_index >= 0 &&
-        game_state.session.inventory_selection_index < game_state.session.inventory.count &&
-        game_state.session.inventory.slots[game_state.session.inventory_selection_index].item != NULL) {
-        ascii_font_draw(
-            chao_canvas,
-            font,
-            x + 10,
-            y + h - 30,
-            COLOR_LIGHTGRAY,
-            "%s: %s",
-            u2_get_inventory_action_label(game_state.session.inventory.slots[game_state.session.inventory_selection_index].item),
-            game_state.session.inventory.slots[game_state.session.inventory_selection_index].item->name
-        );
-    }
-    ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Up/Down select  Enter acts  Esc closes");
+    // if (game_state.session.inventory_selection_index >= 0 &&
+    //     game_state.session.inventory_selection_index < game_state.session.inventory.count &&
+    //     game_state.session.inventory.slots[game_state.session.inventory_selection_index].item != NULL) {
+    //     ascii_font_draw(
+    //         chao_canvas,
+    //         font,
+    //         x + 10,
+    //         y + h - 30,
+    //         COLOR_LIGHTGRAY,
+    //         "%s: %s",
+    //         u2_get_inventory_action_label(game_state.session.inventory.slots[game_state.session.inventory_selection_index].item),
+    //         game_state.session.inventory.slots[game_state.session.inventory_selection_index].item->name
+    //     );
+    // }
+    // ascii_font_draw(chao_canvas, font, x + 10, y + h - 18, COLOR_YELLOW, "Up/Down select  Enter acts  Esc closes");
 }
 
 static void u2_draw_spell_panel(void) {
@@ -4221,6 +4569,7 @@ static void u2_fill_save_data(U2SaveData* save_data) {
     save_data->dungeon.return_x = game_state.session.dungeon.return_x;
     save_data->dungeon.return_y = game_state.session.dungeon.return_y;
     memcpy(save_data->dungeon_seen, game_state.dungeon_seen, sizeof(save_data->dungeon_seen));
+    memcpy(save_data->dungeon_progress, game_state.dungeon_progress, sizeof(save_data->dungeon_progress));
 
     save_data->inventory_count = min(game_state.session.inventory.count, U2_MAX_INVENTORY_SLOTS);
     for (int i = 0; i < save_data->inventory_count; ++i) {
@@ -4390,6 +4739,7 @@ static bool u2_try_load_game(void) {
     game_state.session.food_depletion_step_counter = max(0, save_data.food_depletion_step_counter);
     game_state.session.food_regen_step_counter = max(0, save_data.food_regen_step_counter);
     memcpy(game_state.dungeon_seen, save_data.dungeon_seen, sizeof(game_state.dungeon_seen));
+    memcpy(game_state.dungeon_progress, save_data.dungeon_progress, sizeof(game_state.dungeon_progress));
     u2_clear_runtime_dungeon_visibility();
     game_state.session.dungeon.active = save_data.dungeon.active != 0;
     game_state.session.dungeon.tower_mode = save_data.dungeon.tower_mode != 0;
