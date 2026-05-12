@@ -120,6 +120,7 @@ typedef struct {
     int food;
     int food_depletion_step_counter;
     int food_regen_step_counter;
+    int world_turn_count;
     int title_selection_index;
     int class_selection_index;
     int character_selection_index;

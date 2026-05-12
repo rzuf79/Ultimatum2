@@ -79,6 +79,17 @@ typedef struct {
 
 typedef struct {
     const char* id;
+    const char* source_map_id;
+    int source_x;
+    int source_y;
+    const char* destination_map_id;
+    int destination_x;
+    int destination_y;
+    int schedule_offset;
+} U2TimeGateDef;
+
+typedef struct {
+    const char* id;
     const char* surface_map_id;
     int surface_x;
     int surface_y;
@@ -88,7 +99,6 @@ typedef struct {
     const char* theme_id;
     const char* guardian_monster_template_id;
     const char* guardian_name;
-    const char* final_reward_relic_item_id;
     int final_reward_gold;
     const char* final_bonus_item_id;
 } U2DungeonPresetDef;
@@ -272,9 +282,34 @@ static const U2TransitionDef u2_transition_defs[] = {
 
 static const size_t u2_transition_defs_count = sizeof(u2_transition_defs) / sizeof(u2_transition_defs[0]);
 
+static const U2TimeGateDef u2_time_gate_defs[] = {
+    { "bc_europe", "bc1423", 16, 16, "ad1990", 28, 12, 4 },
+    { "bc_south_america", "bc1423", 42, 24, "aftermath", 8, 11, 11 },
+    { "bc_asia", "bc1423", 48, 24, "pangea", 34, 8, 17 },
+    { "bc_north_america", "bc1423", 19, 52, "legends", 29, 56, 22 },
+
+    { "ad_great_britain", "ad1990", 28, 12, "bc1423", 16, 16, 2 },
+
+    { "aftermath_nw_america", "aftermath", 8, 11, "ad1990", 28, 12, 6 },
+    { "aftermath_north_asia", "aftermath", 52, 24, "bc1423", 16, 16, 14 },
+    { "aftermath_south_asia", "aftermath", 50, 34, "pangea", 34, 8, 20 },
+
+    { "pangea_eurasia", "pangea", 34, 8, "bc1423", 48, 24, 1 },
+    { "pangea_greenland", "pangea", 47, 28, "legends", 29, 56, 8 },
+    { "pangea_africa", "pangea", 20, 37, "aftermath", 8, 11, 13 },
+    { "pangea_south", "pangea", 36, 56, "ad1990", 28, 12, 19 },
+
+    { "legends_1", "legends", 29, 56, "pangea", 47, 28, 0 },
+    { "legends_2", "legends", 31, 56, "bc1423", 48, 24, 6 },
+    { "legends_3", "legends", 33, 56, "ad1990", 28, 12, 12 },
+    { "legends_4", "legends", 35, 56, "aftermath", 8, 11, 18 },
+};
+
+static const size_t u2_time_gate_defs_count = sizeof(u2_time_gate_defs) / sizeof(u2_time_gate_defs[0]);
+
 static const U2DungeonPresetDef u2_dungeon_preset_defs[] = {
-    { "serpentpit", "bc1423", 25, 5, false, "Serpent Pit", 5, "serpent", "serpent_matriarch", "Serpent Matriarch", "serpent_idol", 180, "scale_armor" },
-    { "moontower", "bc1423", 24, 40, true, "Moon Tower", 5, "moon", "moon_warden", "Moon Warden", "moon_lens", 180, "wizard_staff" },
+    { "serpentpit", "bc1423", 25, 5, false, "Serpent Pit", 5, "serpent", "serpent_matriarch", "Serpent Matriarch", 320, "scale_armor" },
+    { "moontower", "bc1423", 24, 40, true, "Moon Tower", 5, "moon", "moon_warden", "Moon Warden", 320, "wizard_staff" },
 };
 
 static const size_t u2_dungeon_preset_defs_count = sizeof(u2_dungeon_preset_defs) / sizeof(u2_dungeon_preset_defs[0]);
@@ -434,6 +469,23 @@ static const U2TransitionDef* u2_find_transition(const char* map_id, int tile_x,
             return transition;
         }
     }
+    return NULL;
+}
+
+static const U2TimeGateDef* u2_find_time_gate(const char* map_id, int tile_x, int tile_y) {
+    if (map_id == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < u2_time_gate_defs_count; ++i) {
+        const U2TimeGateDef* time_gate = &u2_time_gate_defs[i];
+        if (strcmp(time_gate->source_map_id, map_id) == 0 &&
+            time_gate->source_x == tile_x &&
+            time_gate->source_y == tile_y) {
+            return time_gate;
+        }
+    }
+
     return NULL;
 }
 
